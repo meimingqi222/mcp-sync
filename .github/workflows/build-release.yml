@@ -111,6 +111,8 @@ jobs:
 
             Docs: https://github.com/${{ github.repository }}
           files: |
-            build/bin/*
+            *.exe
+            *.app
+            mcp-sync
           draft: false
           prerelease: false
