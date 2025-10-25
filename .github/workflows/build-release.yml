@@ -73,14 +73,14 @@ jobs:
         run: |
           cd build/bin
           Compress-Archive -Path mcp-sync.exe -DestinationPath mcp-sync-windows.zip
-          ls -la
+          Get-ChildItem
 
       - name: Package binaries - macOS
         if: matrix.name == 'macos'
         run: |
           cd build/bin
           tar -czf mcp-sync-macos.tar.gz mcp-sync.app
-          ls -lah
+          ls -la
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
