@@ -1,0 +1,153 @@
+agents:
+  - id: claude-code
+    name: Claude Code
+    description: Anthropic's Claude Code CLI
+    platforms:
+      windows:
+        config_paths:
+          - ~/.claude.json
+      darwin:
+        config_paths:
+          - ~/.claude.json
+      linux:
+        config_paths:
+          - ~/.claude.json
+    config_key: mcpServers
+    format: standard
+
+  - id: cursor
+    name: Cursor
+    description: Cursor AI Editor
+    platforms:
+      windows:
+        config_paths:
+          - ~/.cursor/mcp.json
+      darwin:
+        config_paths:
+          - ~/.cursor/mcp.json
+      linux:
+        config_paths:
+          - ~/.cursor/mcp.json
+    config_key: mcpServers
+    format: standard
+
+  - id: windsurf
+    name: Windsurf
+    description: Codeium Windsurf
+    platforms:
+      windows:
+        config_paths:
+          - ~/.codeium/windsurf/mcp_config.json
+      darwin:
+        config_paths:
+          - ~/.codeium/windsurf/mcp_config.json
+      linux:
+        config_paths:
+          - ~/.codeium/windsurf/mcp_config.json
+    config_key: mcpServers
+    format: standard
+
+  - id: qwen-cli
+    name: Qwen CLI
+    description: Alibaba Qwen Code Assistant
+    platforms:
+      windows:
+        config_paths:
+          - ~/.qwen/settings.json
+          - $APPDATA/qwen-code/settings.json
+      darwin:
+        config_paths:
+          - ~/.qwen/settings.json
+          - ~/Library/Application Support/QwenCode/settings.json
+      linux:
+        config_paths:
+          - ~/.qwen/settings.json
+          - /etc/qwen-code/settings.json
+    config_key: mcpServers
+    format: standard
+
+  - id: zed
+    name: Zed
+    description: Zed Editor
+    platforms:
+      windows:
+        config_paths:
+          - $APPDATA/Zed/settings.json
+      darwin:
+        config_paths:
+          - ~/Library/Application Support/Zed/settings.json
+      linux:
+        config_paths:
+          - ~/.config/zed/settings.json
+    config_key: context_servers
+    format: zed
+
+  - id: cline
+    name: Cline
+    description: Cline VS Code Extension
+    platforms:
+      windows:
+        config_paths:
+          - $APPDATA/Code/User/settings.json
+      darwin:
+        config_paths:
+          - ~/Library/Application Support/Code/User/settings.json
+      linux:
+        config_paths:
+          - ~/.config/Code/User/settings.json
+    config_key: mcpServers
+    format: standard
+
+  - id: gemini-cli
+    name: Gemini CLI
+    description: Google Gemini CLI
+    platforms:
+      windows:
+        config_paths:
+          - $ProgramData/gemini-cli/settings.json
+          - ~/.gemini/settings.json
+      darwin:
+        config_paths:
+          - ~/.gemini/settings.json
+          - ~/.config/gemini-cli/settings.json
+      linux:
+        config_paths:
+          - ~/.gemini/settings.json
+          - ~/.config/gemini-cli/settings.json
+    config_key: mcpServers
+    format: standard
+
+  - id: droid
+    name: Droid CLI
+    description: Factory.ai Droid Agent
+    platforms:
+      windows:
+        config_paths:
+          - ~/.factory/mcp.json
+          - ~/.factory/settings.json
+      darwin:
+        config_paths:
+          - ~/.factory/mcp.json
+          - ~/.factory/settings.json
+      linux:
+        config_paths:
+          - ~/.factory/mcp.json
+          - ~/.factory/settings.json
+    config_key: mcpServers
+    format: standard
+
+  - id: iflow
+    name: iFlow CLI
+    description: iFlow AI Assistant CLI
+    platforms:
+      windows:
+        config_paths:
+          - ~/.iflow/settings.json
+      darwin:
+        config_paths:
+          - ~/.iflow/settings.json
+      linux:
+        config_paths:
+          - ~/.iflow/settings.json
+    config_key: mcpServers
+    format: standard

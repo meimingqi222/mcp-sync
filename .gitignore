@@ -1,0 +1,434 @@
+# ==============================================
+# MCP Sync - Comprehensive .gitignore
+# ==============================================
+
+# -------------------
+# Go Build Artifacts
+# -------------------
+build/bin/
+build/debug/
+build/release/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.exe
+wails-mcp-sync
+
+# Go module files
+go.work
+go.work.sum
+
+# Go test binaries
+*.test
+
+# Coverage reports
+*.out
+coverage.txt
+coverage.html
+
+# -------------------
+# Node.js & Frontend
+# -------------------
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Package lock files (choose one, but keep consistent)
+# npm
+package-lock.json
+# yarn
+# yarn.lock
+# pnpm
+pnpm-lock.yaml
+
+# Dependency directories
+.pnpm-store/
+.npm
+.pnp
+.pnp.js
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# -------------------
+# Wails Specific
+# -------------------
+wails_dist/
+wails_build/
+frontend/wailsjs/
+wailselite/
+.mwails/
+
+# Wails build cache
+.wails/
+
+# -------------------
+# IDE & Editors
+# -------------------
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# GoLand
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Atom
+.atom/
+
+# Eclipse
+.metadata
+.project
+.pydevproject
+.settings/
+.classpath
+
+# -------------------
+# Operating System
+# -------------------
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+.DS_Store?
+ehthumbs_vista.db
+*.stackdump
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# -------------------
+# Logs & Cache
+# -------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Grunt intermediate storage
+.grunt
+
+# Bower dependency directory
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons
+build/Release
+
+# Dependency directories
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# parcel-bundler cache
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+out
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Gatsby files
+.cache/
+public
+
+# Storybook build outputs
+.out
+.storybook-out
+storybook-static
+
+# Temporary folders
+tmp/
+temp/
+
+# -------------------
+# MCP Sync Specific
+# -------------------
+.mcp-sync/
+~/.mcp-sync/
+!/.mcp-sync/.gitkeep
+
+# Sync configuration with sensitive data
+sync_config.json
+gist_token
+github_token
+
+# Sync logs (keep structure, ignore content)
+sync-logs/
+logs/sync-*.log
+
+# Version history (keep structure, ignore content)
+config-versions/
+versions/
+
+# -------------------
+# Security & Secrets
+# -------------------
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.secrets
+credentials.json
+token.json
+auth.json
+
+# GCP service account
+gcloud/
+service-account.json
+application-credentials.json
+
+# AWS
+.aws/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Kubernetes
+kube-config
+*.kubeconfig
+
+# -------------------
+# Testing
+# -------------------
+test-results/
+test-coverage/
+*.cover
+.coverage
+.coverage.*
+htmlcov/
+
+.tox/
+.nox/
+.pytest_cache/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -------------------
+# Misc
+# -------------------
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+build/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# Visual Studio 2015/2017 cache/options directory
+.vs/
+
+# MSTest test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# NUnit
+*.VisualState.xml
+TestResult.xml
+nunit-*.xml
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+**/Properties/launchSettings.json
+
+# StyleCop
+StyleCopReport.xml
+
+# Package Files
+*.nupkg
+*.snupkg
+
+# Scaffolding
+*.dotTemplate
+
+# Local History for Visual Studio
+.localhistory/
+
+# BeatPulse healthcheck temp healthcheck file
+.healthcheck
+
+# Backup files
+*.bak
+*.tmp
+*.orig
+*~
