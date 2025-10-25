@@ -14,12 +14,12 @@ import (
 )
 
 type AppService struct {
-	detector       *AgentDetector
-	configManager  *ConfigManager
-	configLoader   *ConfigLoader
-	gistSync       *GistSyncService
-	storage        *StorageService
-	securityMgr    *SecurityManager
+	detector      *AgentDetector
+	configManager *ConfigManager
+	configLoader  *ConfigLoader
+	gistSync      *GistSyncService
+	storage       *StorageService
+	securityMgr   *SecurityManager
 }
 
 func NewAppService() (*AppService, error) {
@@ -49,11 +49,11 @@ func NewAppService() (*AppService, error) {
 	securityMgr := NewSecurityManager(homeDir)
 
 	return &AppService{
-		detector:       NewAgentDetector(),
-		configManager:  NewConfigManager(),
-		configLoader:   configLoader,
-		storage:        storage,
-		securityMgr:    securityMgr,
+		detector:      NewAgentDetector(),
+		configManager: NewConfigManager(),
+		configLoader:  configLoader,
+		storage:       storage,
+		securityMgr:   securityMgr,
 	}, nil
 }
 
@@ -72,19 +72,19 @@ func (as *AppService) InitializeGistSync(token, gistID string) (string, error) {
 		}
 		println(fmt.Sprintf("Created new Gist with ID: %s", gistID))
 	}
-	
+
 	as.gistSync = NewGistSyncService(token, gistID)
-	
+
 	// Save sync config to storage
 	config, _ := as.storage.LoadSyncConfig()
 	config.GitHubToken = token
 	config.GistID = gistID
 	config.LastUpdateTime = nowTime()
-	
+
 	if err := as.storage.SaveSyncConfig(config); err != nil {
 		return "", err
 	}
-	
+
 	return gistID, nil
 }
 
@@ -99,21 +99,27 @@ func (as *AppService) SetupGistEncryption(enabled bool, password string) error {
 	config.EnableEncryption = enabled
 	config.EncryptionVersion = "2.0" // 标记使用新版本加密系统
 	config.LastUpdateTime = nowTime()
-	
-	// 如果提供了密码，说明是从旧版本迁移
+
+	// 保存 Gist 加密密码到新字段
 	if password != "" {
-		config.EncryptionPassword = password // 临时保存用于迁移
+		config.GistEncryptionPassword = password
 	} else {
-		config.EncryptionPassword = "" // 旧版本密码字段，新版本不再使用
+		config.GistEncryptionPassword = ""
+	}
+
+	// 清空旧版本密码字段（如果存在）
+	if config.EncryptionPassword != "" {
+		// 保留旧密码字段标记，但实际不再使用
+		config.EncryptionPassword = ""
 	}
 
 	if err := as.storage.SaveSyncConfig(config); err != nil {
 		return fmt.Errorf("failed to save encryption config: %w", err)
 	}
 
-	// Enable local storage encryption
+	// Enable local storage encryption (使用系统密钥环)
 	if enabled {
-		as.storage.EnableEncryption(password) // 密码参数为空时使用新系统
+		as.storage.EnableEncryption("") // 新版本不需要密码参数
 	}
 
 	return as.gistSync.SetEncryption(enabled, password)
@@ -131,18 +137,23 @@ func (as *AppService) PushAllAgentsToGist() error {
 	if err != nil {
 		return fmt.Errorf("failed to load sync config: %w", err)
 	}
-	
+
 	if config.GitHubToken == "" || config.GistID == "" {
 		return fmt.Errorf("GitHub token or Gist ID not configured")
 	}
-	
+
 	// Initialize gist sync if not already done
 	if as.gistSync == nil {
 		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
-		
+
 		// Setup encryption if enabled
-		if config.EnableEncryption && config.EncryptionPassword != "" {
-			as.gistSync.SetEncryption(config.EnableEncryption, config.EncryptionPassword)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
 		}
 	}
 
@@ -151,11 +162,11 @@ func (as *AppService) PushAllAgentsToGist() error {
 	if err != nil {
 		return fmt.Errorf("failed to detect agents: %w", err)
 	}
-	
+
 	// Prepare a map of all agent configs to push
 	allAgentConfigs := make(map[string]interface{})
 	pushedCount := 0
-	
+
 	for _, agent := range agents {
 		if agent.Status == "detected" {
 			agentConfig, err := as.GetAgentMCPConfig(agent.ID)
@@ -163,7 +174,7 @@ func (as *AppService) PushAllAgentsToGist() error {
 				println(fmt.Sprintf("Warning: failed to read config from %s: %v", agent.ID, err))
 				continue
 			}
-			
+
 			// Store the COMPLETE config for this agent
 			allAgentConfigs[agent.ID] = agentConfig
 			pushedCount++
@@ -219,18 +230,23 @@ func (as *AppService) PushToGist(servers []models.MCPServer) error {
 	if err != nil {
 		return fmt.Errorf("failed to load sync config: %w", err)
 	}
-	
+
 	if config.GitHubToken == "" || config.GistID == "" {
 		return fmt.Errorf("GitHub token or Gist ID not configured")
 	}
-	
+
 	// Initialize gist sync if not already done
 	if as.gistSync == nil {
 		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
-		
+
 		// Setup encryption if enabled
-		if config.EnableEncryption && config.EncryptionPassword != "" {
-			as.gistSync.SetEncryption(config.EnableEncryption, config.EncryptionPassword)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
 		}
 	}
 
@@ -280,18 +296,23 @@ func (as *AppService) PullFromGist() ([]models.MCPServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load sync config: %w", err)
 	}
-	
+
 	if config.GitHubToken == "" || config.GistID == "" {
 		return nil, fmt.Errorf("GitHub token or Gist ID not configured")
 	}
-	
+
 	// Initialize gist sync if not already done
 	if as.gistSync == nil {
 		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
-		
+
 		// Setup encryption if enabled
-		if config.EnableEncryption && config.EncryptionPassword != "" {
-			as.gistSync.SetEncryption(config.EnableEncryption, config.EncryptionPassword)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
 		}
 	}
 
@@ -621,14 +642,14 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 		serversData = make(map[string]interface{})
 	}
 
-	println(fmt.Sprintf("同步配置: %s (%s/%s) -> %s (%s/%s)", 
+	println(fmt.Sprintf("同步配置: %s (%s/%s) -> %s (%s/%s)",
 		sourceAgentID, sourceKey, sourceFormat,
 		targetAgentID, targetKey, targetFormat))
 
 	// Convert format if needed
 	if sourceFormat != targetFormat {
 		println(fmt.Sprintf("  转换格式: %s -> %s", sourceFormat, targetFormat))
-		
+
 		// Try to use the configuration-based transform rule first
 		transformRule := as.configLoader.GetTransformRule(sourceFormat, targetFormat)
 		if transformRule != nil {
@@ -697,7 +718,7 @@ func (as *AppService) getLatestLocalVersion() (*models.ConfigVersion, error) {
 	if err != nil || len(versions) == 0 {
 		return nil, err
 	}
-	
+
 	// 计算最新版本的 hash
 	versions[0].Hash = computeHash(versions[0].Content)
 	return &versions[0], nil
@@ -710,36 +731,41 @@ func (as *AppService) DetectPushConflict() (*models.SyncConflict, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if config.GitHubToken == "" || config.GistID == "" {
 		return nil, fmt.Errorf("GitHub token or Gist ID not configured")
 	}
-	
+
 	// Initialize gist sync if needed
 	if as.gistSync == nil {
 		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
-		if config.EnableEncryption && config.EncryptionPassword != "" {
-			as.gistSync.SetEncryption(config.EnableEncryption, config.EncryptionPassword)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
 		}
 	}
-	
+
 	// Get local version
 	localVersion, err := as.getLatestLocalVersion()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get local version: %w", err)
 	}
-	
+
 	if localVersion == nil {
 		return &models.SyncConflict{HasConflict: false}, nil
 	}
-	
+
 	// Get remote version from Gist
 	remoteVersion, err := as.gistSync.GetLatestVersion()
 	if err != nil {
 		// If Gist is empty, no conflict
 		return &models.SyncConflict{HasConflict: false}, nil
 	}
-	
+
 	// Compare hashes
 	if remoteVersion != nil && localVersion.Hash != remoteVersion.Hash {
 		return &models.SyncConflict{
@@ -750,7 +776,7 @@ func (as *AppService) DetectPushConflict() (*models.SyncConflict, error) {
 			Message:       "Local configuration differs from cloud version. Choose to keep local, use remote, or merge.",
 		}, nil
 	}
-	
+
 	return &models.SyncConflict{HasConflict: false}, nil
 }
 
@@ -761,35 +787,40 @@ func (as *AppService) DetectPullConflict() (*models.SyncConflict, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if config.GitHubToken == "" || config.GistID == "" {
 		return nil, fmt.Errorf("GitHub token or Gist ID not configured")
 	}
-	
+
 	// Initialize gist sync if needed
 	if as.gistSync == nil {
 		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
-		if config.EnableEncryption && config.EncryptionPassword != "" {
-			as.gistSync.SetEncryption(config.EnableEncryption, config.EncryptionPassword)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
 		}
 	}
-	
+
 	// Get local version
 	localVersion, err := as.getLatestLocalVersion()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get local version: %w", err)
 	}
-	
+
 	// Get remote version
 	remoteVersion, err := as.gistSync.GetLatestVersion()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get remote version: %w", err)
 	}
-	
+
 	if remoteVersion == nil {
 		return &models.SyncConflict{HasConflict: false}, nil
 	}
-	
+
 	// Compare hashes - if local is newer than remote, there's unsaved local changes
 	if localVersion != nil && localVersion.Timestamp.After(remoteVersion.Timestamp) && localVersion.Hash != remoteVersion.Hash {
 		return &models.SyncConflict{
@@ -800,30 +831,30 @@ func (as *AppService) DetectPullConflict() (*models.SyncConflict, error) {
 			Message:       "You have local changes not yet pushed to cloud. Choose to keep local, use remote, or merge.",
 		}, nil
 	}
-	
+
 	return &models.SyncConflict{HasConflict: false}, nil
 }
 
 // ResolveConflict 解决冲突 - 根据用户选择
 func (as *AppService) ResolveConflict(conflictType string, resolution string) error {
 	// resolution: "keep_local", "use_remote", "merge"
-	
+
 	switch resolution {
 	case "keep_local":
 		// Just push local to remote
 		return as.PushAllAgentsToGist()
-	
+
 	case "use_remote":
 		// Just pull remote to local
 		_, err := as.PullFromGist()
 		return err
-	
+
 	case "merge":
 		// TODO: Implement smart merge logic
 		// For now, just use remote
 		_, err := as.PullFromGist()
 		return err
-	
+
 	default:
 		return fmt.Errorf("unknown resolution type: %s", resolution)
 	}

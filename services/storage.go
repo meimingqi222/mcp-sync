@@ -12,8 +12,8 @@ import (
 )
 
 type StorageService struct {
-	dataDir   string
-	crypto    *SecureCrypto
+	dataDir string
+	crypto  *SecureCrypto
 	// 保留旧的securityMgr以兼容现有代码（将在下个版本移除）
 	securityMgr *SecurityManager
 	oldEnabled  bool
@@ -69,13 +69,13 @@ func (s *StorageService) DisableEncryption() error {
 			return fmt.Errorf("failed to disable encryption: %w", err)
 		}
 	}
-	
+
 	// 清理旧的加密组件
 	if s.securityMgr != nil {
 		s.securityMgr = nil
 	}
 	s.oldEnabled = false
-	
+
 	return nil
 }
 
@@ -231,10 +231,15 @@ func (s *StorageService) LoadSyncConfig() (models.SyncConfig, error) {
 		ioutil.WriteFile(path, data, 0644)
 	}
 
-	// 清除密码字段以确保安全
-	if config.EncryptionPassword != "" {
-		config.EncryptionPassword = ""
-		// 迁移到新系统后，保存更新后的配置（不包含密码）
+	// 处理密码迁移逻辑
+	if config.EncryptionPassword != "" && config.GistEncryptionPassword == "" {
+		// 如果有旧密码字段但没有新字段，说明需要迁移
+		config.GistEncryptionPassword = config.EncryptionPassword
+
+		// 标记已迁移，但保留旧字段以防回滚需要
+		config.EncryptionVersion = "2.0"
+
+		// 保存更新后的配置（包含新的密码字段）
 		configData, _ := json.MarshalIndent(config, "", "  ")
 		configData, _ = s.encryptIfNeeded(configData)
 		ioutil.WriteFile(path, configData, 0644)
