@@ -67,11 +67,21 @@ jobs:
       - name: Build
         run: wails build -clean -platform ${{ matrix.platform }}
 
+      - name: Package binaries
+        run: |
+          cd build/bin
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            zip -j mcp-sync-windows.zip mcp-sync.exe
+          elif [ "${{ matrix.name }}" = "macos" ]; then
+            tar -czf mcp-sync-macos.tar.gz mcp-sync.app
+          fi
+          ls -lah
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mcp-sync-${{ matrix.name }}
-          path: build/bin/*
+          path: build/bin/
           retention-days: 7
 
   release:
@@ -100,8 +110,8 @@ jobs:
             Cross-platform MCP Configuration Manager
 
             Downloads:
-            - Windows: mcp-sync.exe
-            - macOS: mcp-sync.app
+            - Windows: mcp-sync-windows.zip (Contains mcp-sync.exe)
+            - macOS: mcp-sync-macos.tar.gz (Contains mcp-sync.app)
 
             Features:
             - Support for 9+ programming tools
@@ -109,10 +119,13 @@ jobs:
             - Local AES-256 encryption
             - Windows & macOS support
 
+            How to install:
+            - Windows: Extract zip and run mcp-sync.exe
+            - macOS: Extract tar.gz and run mcp-sync.app
+
             Docs: https://github.com/${{ github.repository }}
           files: |
-            *.exe
-            *.app
-            mcp-sync
+            mcp-sync-windows.zip
+            mcp-sync-macos.tar.gz
           draft: false
           prerelease: false
