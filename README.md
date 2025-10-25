@@ -7,6 +7,7 @@
 - 🔗 **多工具支持**: 支持 Claude Code、Cursor、Windsurf、Qwen CLI、Zed、Cline、Gemini CLI、Droid CLI、iFlow CLI 等
 - 🔄 **智能同步**: 自动识别并处理不同工具间的配置差异
 - 🎨 **格式转换**: 自动转换不同的 MCP 配置格式（Standard ↔ Zed）
+- 🪟 **Windows 兼容**: 自动处理 Windows 上 npx 命令的 cmd /c 包装
 - ⚙️ **配置化扩展**: 无需修改代码，通过 YAML 配置添加新工具
 - 🌍 **跨平台**: 支持 Windows、macOS、Linux
 - 💾 **Gist 同步**: 支持通过 GitHub Gist 备份和分享配置
@@ -31,6 +32,15 @@ npm install --prefix frontend
 ```bash
 wails build
 ```
+
+### Windows 特别说明
+
+🪟 **自动处理 npx 命令**: 在 Windows 上，MCP Sync 会自动将 npx 命令包装为 `cmd /c npx`，解决了 Windows 系统上 npx 执行的问题。
+
+无需手动修改配置，系统会自动：
+- 检测 npx 命令并自动包装
+- 保持原始配置格式
+- 确保跨平台兼容性
 
 ### 运行
 

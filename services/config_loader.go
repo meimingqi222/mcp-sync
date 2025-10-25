@@ -14,12 +14,12 @@ import (
 var configFS embed.FS
 
 type AgentDefinition struct {
-	ID            string                   `yaml:"id"`
-	Name          string                   `yaml:"name"`
-	Description   string                   `yaml:"description"`
-	Platforms     map[string]PlatformConfig `yaml:"platforms"`
-	ConfigKey     string                   `yaml:"config_key"`
-	Format        string                   `yaml:"format"`
+	ID          string                    `yaml:"id"`
+	Name        string                    `yaml:"name"`
+	Description string                    `yaml:"description"`
+	Platforms   map[string]PlatformConfig `yaml:"platforms"`
+	ConfigKey   string                    `yaml:"config_key"`
+	Format      string                    `yaml:"format"`
 }
 
 type PlatformConfig struct {
@@ -27,9 +27,11 @@ type PlatformConfig struct {
 }
 
 type TransformRule struct {
-	AddFields   map[string]interface{} `yaml:"add_fields"`
-	RemoveFields []string              `yaml:"remove_fields"`
-	KeepFields  []string               `yaml:"keep_fields"`
+	AddFields         map[string]interface{} `yaml:"add_fields"`
+	RemoveFields      []string               `yaml:"remove_fields"`
+	KeepFields        []string               `yaml:"keep_fields"`
+	WrapNpxCommands   bool                   `yaml:"wrap_npx_commands"`
+	UnwrapNpxCommands bool                   `yaml:"unwrap_npx_commands"`
 }
 
 type AgentsConfig struct {
@@ -200,26 +202,136 @@ func (cl *ConfigLoader) ApplyTransformRule(data interface{}, rule *TransformRule
 
 		newConfig := make(map[string]interface{})
 
-		// Add new fields from rule
-		for key, value := range rule.AddFields {
-			newConfig[key] = value
-		}
-
-		// Keep specified fields
-		if len(rule.KeepFields) > 0 {
-			for _, field := range rule.KeepFields {
-				if value, exists := configMap[field]; exists {
-					newConfig[field] = value
+		// Handle npx command wrapping/unwrapping
+		if rule.WrapNpxCommands || rule.UnwrapNpxCommands {
+			if command, exists := configMap["command"].(string); exists {
+				if rule.WrapNpxCommands && runtime.GOOS == "windows" {
+					// Wrap npx commands with cmd /c on Windows
+					if strings.HasPrefix(command, "npx ") || command == "npx" {
+						newConfig["command"] = "cmd"
+						if strings.HasPrefix(command, "npx ") {
+							newConfig["args"] = []string{"/c", command}
+						} else {
+							// Handle case where args are separate
+							if args, ok := configMap["args"].([]interface{}); ok {
+								newArgs := []string{"/c", "npx"}
+								for _, arg := range args {
+									if argStr, ok := arg.(string); ok {
+										newArgs = append(newArgs, argStr)
+									}
+								}
+								newConfig["args"] = newArgs
+							} else {
+								newConfig["args"] = []string{"/c", "npx"}
+							}
+						}
+					} else {
+						// Keep original command for non-npx commands
+						newConfig["command"] = command
+						if args, exists := configMap["args"]; exists {
+							newConfig["args"] = args
+						}
+					}
+				} else if rule.UnwrapNpxCommands {
+					// Unwrap cmd /c from npx commands
+					if command == "cmd" {
+						if args, ok := configMap["args"].([]interface{}); ok && len(args) >= 2 {
+							if firstArg, ok := args[0].(string); ok && firstArg == "/c" {
+								if secondArg, ok := args[1].(string); ok && (strings.HasPrefix(secondArg, "npx ") || secondArg == "npx") {
+									if strings.HasPrefix(secondArg, "npx ") {
+										// npx with arguments combined
+										newConfig["command"] = secondArg
+										if len(args) > 2 {
+											// Extract additional arguments
+											var remainingArgs []interface{}
+											for i := 2; i < len(args); i++ {
+												remainingArgs = append(remainingArgs, args[i])
+											}
+											newConfig["args"] = remainingArgs
+										}
+									} else if secondArg == "npx" {
+										// npx as command with separate args
+										if len(args) > 2 {
+											var remainingArgs []string
+											for i := 2; i < len(args); i++ {
+												if argStr, ok := args[i].(string); ok {
+													remainingArgs = append(remainingArgs, argStr)
+												}
+											}
+											newConfig["command"] = "npx " + strings.Join(remainingArgs, " ")
+										} else {
+											newConfig["command"] = "npx"
+										}
+									}
+								} else {
+									// Not an npx command, keep original
+									newConfig["command"] = command
+									newConfig["args"] = args
+								}
+							} else {
+								// Not a /c command, keep original
+								newConfig["command"] = command
+								newConfig["args"] = args
+							}
+						} else {
+							// Not enough args, keep original
+							newConfig["command"] = command
+							if args, exists := configMap["args"]; exists {
+								newConfig["args"] = args
+							}
+						}
+					} else {
+						// Not a cmd command, keep original
+						newConfig["command"] = command
+						if args, exists := configMap["args"]; exists {
+							newConfig["args"] = args
+						}
+					}
+				} else {
+					// Keep original command if no wrapping/unwrapping needed
+					newConfig["command"] = command
+					if args, exists := configMap["args"]; exists {
+						newConfig["args"] = args
+					}
 				}
 			}
-		} else {
-			// If no keep_fields specified, copy all fields except removed ones
+		}
+
+		// Add new fields from rule
+		for key, value := range rule.AddFields {
+			if _, exists := newConfig[key]; !exists {
+				newConfig[key] = value
+			}
+		}
+
+		// Keep specified fields (only if not already handled by npx logic)
+		if len(rule.KeepFields) > 0 && !(rule.WrapNpxCommands || rule.UnwrapNpxCommands) {
+			for _, field := range rule.KeepFields {
+				if value, exists := configMap[field]; exists {
+					if _, exists := newConfig[field]; !exists {
+						newConfig[field] = value
+					}
+				}
+			}
+		} else if !(rule.WrapNpxCommands || rule.UnwrapNpxCommands) {
+			// If no keep_fields specified and no npx handling, copy all fields except removed ones
 			removeSet := make(map[string]bool)
 			for _, field := range rule.RemoveFields {
 				removeSet[field] = true
 			}
 			for key, value := range configMap {
 				if !removeSet[key] {
+					if _, exists := newConfig[key]; !exists {
+						newConfig[key] = value
+					}
+				}
+			}
+		}
+
+		// Copy env and other fields that weren't handled
+		for key, value := range configMap {
+			if key != "command" && key != "args" {
+				if _, exists := newConfig[key]; !exists {
 					newConfig[key] = value
 				}
 			}

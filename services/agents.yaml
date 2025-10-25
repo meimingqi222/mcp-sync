@@ -10,12 +10,34 @@ transforms:
       - command
       - args
       - env
-  
+
   zed_to_standard:
     # Removes Zed-specific fields when converting to standard format
     remove_fields:
       - source
       - enabled
+    keep_fields:
+      - command
+      - args
+      - env
+
+  # Windows-specific transformation for npx commands
+  standard_to_windows:
+    # Wraps npx commands with cmd /c on Windows
+    wrap_npx_commands: true
+    add_fields:
+      _windows_wrapped: true
+    keep_fields:
+      - command
+      - args
+      - env
+
+  # Reverse transformation for Windows npx commands
+  windows_to_standard:
+    # Unwraps cmd /c from npx commands
+    unwrap_npx_commands: true
+    remove_fields:
+      - _windows_wrapped
     keep_fields:
       - command
       - args

@@ -20,6 +20,7 @@ type AppService struct {
 	gistSync      *GistSyncService
 	storage       *StorageService
 	securityMgr   *SecurityManager
+	windowsSvc    *WindowsService
 }
 
 func NewAppService() (*AppService, error) {
@@ -54,6 +55,7 @@ func NewAppService() (*AppService, error) {
 		configLoader:  configLoader,
 		storage:       storage,
 		securityMgr:   securityMgr,
+		windowsSvc:    NewWindowsService(),
 	}, nil
 }
 
@@ -630,6 +632,26 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 		return fmt.Errorf("failed to read source agent config: %w", err)
 	}
 
+	// Unwrap Windows-specific commands from source if it's already wrapped
+	if as.windowsSvc.IsWindows() {
+		println("  检测源配置中是否需要解包 Windows npx 命令")
+
+		// Extract servers data from source
+		sourceKey := as.configLoader.GetConfigKey(sourceAgentID)
+		serversData, ok := sourceConfig[sourceKey]
+		if !ok {
+			serversData = make(map[string]interface{})
+		}
+
+		// Convert to MCPServer slice, unwrap, and convert back
+		servers := as.convertServersDataToMCPServers(serversData)
+		servers = as.windowsSvc.ApplyWindowsTransformation(servers, false)
+		serversData = as.convertMCPServersToServersData(servers)
+
+		sourceConfig[sourceKey] = serversData
+		println("  源配置 Windows npx 命令解包完成")
+	}
+
 	// Get source and target agent definitions
 	sourceKey := as.configLoader.GetConfigKey(sourceAgentID)
 	sourceFormat := as.configLoader.GetFormat(sourceAgentID)
@@ -645,6 +667,18 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 	println(fmt.Sprintf("同步配置: %s (%s/%s) -> %s (%s/%s)",
 		sourceAgentID, sourceKey, sourceFormat,
 		targetAgentID, targetKey, targetFormat))
+
+	// Apply Windows-specific transformations if running on Windows
+	if as.windowsSvc.IsWindows() {
+		println("  检测到 Windows 系统，应用 npx 命令转换")
+
+		// Convert to MCPServer slice, apply transformation, and convert back
+		servers := as.convertServersDataToMCPServers(serversData)
+		servers = as.windowsSvc.ApplyWindowsTransformation(servers, true)
+		serversData = as.convertMCPServersToServersData(servers)
+
+		println("  Windows npx 命令转换完成")
+	}
 
 	// Convert format if needed
 	if sourceFormat != targetFormat {
@@ -672,6 +706,65 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 	}
 
 	return as.SaveAgentMCPConfig(targetAgentID, targetConfig)
+}
+
+// Helper methods for Windows transformations
+func (as *AppService) convertServersDataToMCPServers(serversData interface{}) []models.MCPServer {
+	var servers []models.MCPServer
+	if serverMap, ok := serversData.(map[string]interface{}); ok {
+		for serverName, serverConfig := range serverMap {
+			server := models.MCPServer{
+				ID:   serverName,
+				Name: serverName,
+			}
+			if serverMap, ok := serverConfig.(map[string]interface{}); ok {
+				if cmd, ok := serverMap["command"].(string); ok {
+					server.Command = cmd
+				}
+				if args, ok := serverMap["args"].([]interface{}); ok {
+					for _, arg := range args {
+						if argStr, ok := arg.(string); ok {
+							server.Args = append(server.Args, argStr)
+						}
+					}
+				}
+				if env, ok := serverMap["env"].(map[string]interface{}); ok {
+					server.Env = make(map[string]string)
+					for k, v := range env {
+						if strVal, ok := v.(string); ok {
+							server.Env[k] = strVal
+						}
+					}
+				}
+			}
+			servers = append(servers, server)
+		}
+	}
+	return servers
+}
+
+func (as *AppService) convertMCPServersToServersData(servers []models.MCPServer) map[string]interface{} {
+	serversData := make(map[string]interface{})
+	for _, server := range servers {
+		serverConfig := make(map[string]interface{})
+		serverConfig["command"] = server.Command
+		if len(server.Args) > 0 {
+			argsInterface := make([]interface{}, len(server.Args))
+			for i, arg := range server.Args {
+				argsInterface[i] = arg
+			}
+			serverConfig["args"] = argsInterface
+		}
+		if len(server.Env) > 0 {
+			envInterface := make(map[string]interface{})
+			for k, v := range server.Env {
+				envInterface[k] = v
+			}
+			serverConfig["env"] = envInterface
+		}
+		serversData[server.Name] = serverConfig
+	}
+	return serversData
 }
 
 // GetGistSecurityWarnings 获取 Gist 同步的安全警告
