@@ -69,10 +69,11 @@ jobs:
 
       - name: Package binaries - Windows
         if: matrix.name == 'windows'
+        shell: powershell
         run: |
           cd build/bin
-          zip -j mcp-sync-windows.zip mcp-sync.exe
-          ls -lah
+          Compress-Archive -Path mcp-sync.exe -DestinationPath mcp-sync-windows.zip
+          ls -la
 
       - name: Package binaries - macOS
         if: matrix.name == 'macos'
@@ -85,7 +86,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mcp-sync-${{ matrix.name }}
-          path: build/bin/
+          path: |
+            build/bin/mcp-sync-windows.zip
+            build/bin/mcp-sync-macos.tar.gz
           retention-days: 7
 
   release:
@@ -101,8 +104,8 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: mcp-sync-*
-          merge-multiple: true
+          path: artifacts
+          merge-multiple: false
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -129,7 +132,7 @@ jobs:
 
             Docs: https://github.com/${{ github.repository }}
           files: |
-            mcp-sync-windows.zip
-            mcp-sync-macos.tar.gz
+            artifacts/*/mcp-sync-windows.zip
+            artifacts/*/mcp-sync-macos.tar.gz
           draft: false
           prerelease: false
