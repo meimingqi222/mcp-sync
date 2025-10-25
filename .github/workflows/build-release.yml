@@ -20,8 +20,6 @@ jobs:
             platform: windows/amd64
           - os: macos-latest
             platform: darwin/universal
-          - os: ubuntu-latest
-            platform: linux/amd64
 
     steps:
       - name: Checkout
@@ -55,19 +53,6 @@ jobs:
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
-
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-5.0-dev \
-            libcairo2-dev \
-            libglib2.0-dev \
-            build-essential \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -114,13 +99,12 @@ jobs:
             Downloads:
             - Windows: mcp-sync.exe
             - macOS: mcp-sync.app
-            - Linux: mcp-sync
 
             Features:
             - Support for 9+ programming tools
             - GitHub Gist integration
             - Local AES-256 encryption
-            - Cross-platform support
+            - Windows & macOS support
 
             Docs: https://github.com/${{ github.repository }}
           files: |
