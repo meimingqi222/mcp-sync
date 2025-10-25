@@ -18,7 +18,7 @@ type GistSyncService struct {
 	client            *http.Client
 	encryptionEnabled bool
 	encryptionKey     string
-	securityMgr       *SecurityManager
+	securityMgr       CryptoOperations
 }
 
 func NewGistSyncService(githubToken, gistID string) *GistSyncService {
@@ -35,12 +35,56 @@ func (gs *GistSyncService) SetEncryption(enabled bool, password string) error {
 	gs.encryptionEnabled = enabled
 	if enabled {
 		if password == "" {
-			return fmt.Errorf("encryption password cannot be empty")
+			// 新版本：使用加密文件的密钥而不是用户提供的密码
+			crypto, err := NewSecureCrypto()
+			if err != nil {
+				return fmt.Errorf("failed to initialize secure encryption: %w", err)
+			}
+			
+			if !crypto.IsEnabled() {
+				if err := crypto.Enable(); err != nil {
+					return fmt.Errorf("failed to enable secure encryption: %w", err)
+				}
+			}
+			
+			// 创建一个包装SecurityManager的适配器
+			gs.securityMgr = &SecurityManagerAdapter{crypto: crypto}
+			gs.encryptionKey = "system-stored-key" // 标记使用系统密钥
+		} else {
+			// 旧版本：兼容模式，使用用户提供的密码
+			gs.encryptionKey = password
+			gs.securityMgr = NewSecurityManager(password)
+			
+			// 尝试迁移到新系统
+			crypto, _ := NewSecureCrypto()
+			if crypto != nil {
+				if err := crypto.MigrateFromPassword(password); err == nil {
+					if err := crypto.Enable(); err == nil {
+						// 迁移成功，切换到新系统
+						gs.securityMgr = &SecurityManagerAdapter{crypto: crypto}
+						gs.encryptionKey = "system-stored-key"
+					}
+				}
+			}
 		}
-		gs.encryptionKey = password
-		gs.securityMgr = NewSecurityManager(password)
+	} else {
+		gs.securityMgr = nil
+		gs.encryptionKey = ""
 	}
 	return nil
+}
+
+// SecurityManagerAdapter 适配器，将SecureCrypto包装为CryptoOperations接口
+type SecurityManagerAdapter struct {
+	crypto *SecureCrypto
+}
+
+func (sma *SecurityManagerAdapter) Encrypt(plaintext string) (string, error) {
+	return sma.crypto.Encrypt(plaintext)
+}
+
+func (sma *SecurityManagerAdapter) Decrypt(ciphertext string) (string, error) {
+	return sma.crypto.Decrypt(ciphertext)
 }
 
 type GistFile struct {

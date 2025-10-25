@@ -34,8 +34,11 @@ type SyncConfig struct {
 	GitHubToken        string         `json:"github_token"`
 	AutoSync           bool           `json:"auto_sync"`
 	AutoSyncInterval   int           `json:"auto_sync_interval"`
-	EncryptionPassword string       `json:"encryption_password,omitempty"`
 	EnableEncryption   bool          `json:"enable_encryption"`
+	// 保留EncryptionPassword字段以兼容旧版本，但不再使用
+	EncryptionPassword string       `json:"encryption_password,omitempty"`
+	// 新增字段表示加密系统版本
+	EncryptionVersion  string         `json:"encryption_version,omitempty"`
 }
 
 type SyncLog struct {

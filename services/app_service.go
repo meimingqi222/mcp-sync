@@ -97,8 +97,15 @@ func (as *AppService) SetupGistEncryption(enabled bool, password string) error {
 	// Also save encryption config to storage
 	config, _ := as.storage.LoadSyncConfig()
 	config.EnableEncryption = enabled
-	config.EncryptionPassword = password
+	config.EncryptionVersion = "2.0" // 标记使用新版本加密系统
 	config.LastUpdateTime = nowTime()
+	
+	// 如果提供了密码，说明是从旧版本迁移
+	if password != "" {
+		config.EncryptionPassword = password // 临时保存用于迁移
+	} else {
+		config.EncryptionPassword = "" // 旧版本密码字段，新版本不再使用
+	}
 
 	if err := as.storage.SaveSyncConfig(config); err != nil {
 		return fmt.Errorf("failed to save encryption config: %w", err)
@@ -106,7 +113,7 @@ func (as *AppService) SetupGistEncryption(enabled bool, password string) error {
 
 	// Enable local storage encryption
 	if enabled {
-		as.storage.EnableEncryption(password)
+		as.storage.EnableEncryption(password) // 密码参数为空时使用新系统
 	}
 
 	return as.gistSync.SetEncryption(enabled, password)

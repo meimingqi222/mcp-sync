@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// CryptoOperations 定义加密操作接口
+type CryptoOperations interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(ciphertext string) (string, error)
+}
+
 type SecurityManager struct {
 	encryptionKey string
 }
