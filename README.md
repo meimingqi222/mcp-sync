@@ -393,6 +393,7 @@ MCP Sync 包含以下安全功能：
 - **[项目概述](docs/PROJECT_SUMMARY.md)** - 完整的技术架构和实现说明
 - **[安全指南](docs/SECURITY.md)** - 安全最佳实践
 - **[加密存储](docs/ENCRYPTION.md)** - 本地加密存储功能详解
+- **[CI/CD 自动构建](docs/CI-CD.md)** - GitHub Actions 自动构建与发布指南
 
 ## 贡献
 

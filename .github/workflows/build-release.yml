@@ -1,0 +1,99 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+          - os: macos-latest
+            platform: darwin/universal
+          - os: ubuntu-latest
+            platform: linux/amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install deps
+        run: |
+          go mod download
+          npm ci --prefix frontend
+
+      - name: Build
+        run: wails build -clean -platform ${{ matrix.platform }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-sync
+          path: build/bin/*
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-sync
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            MCP Sync v${{ github.ref_name }}
+
+            Cross-platform MCP Configuration Manager
+
+            Downloads:
+            - Windows: mcp-sync.exe
+            - macOS: mcp-sync.app
+            - Linux: mcp-sync
+
+            Features:
+            - Support for 9+ programming tools
+            - GitHub Gist integration
+            - Local AES-256 encryption
+            - Cross-platform support
+
+            Docs: https://github.com/${{ github.repository }}
+          files: |
+            build/bin/*
+          draft: false
+          prerelease: false
