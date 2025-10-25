@@ -67,14 +67,18 @@ jobs:
       - name: Build
         run: wails build -clean -platform ${{ matrix.platform }}
 
-      - name: Package binaries
+      - name: Package binaries - Windows
+        if: matrix.name == 'windows'
         run: |
           cd build/bin
-          if [ "${{ matrix.name }}" = "windows" ]; then
-            zip -j mcp-sync-windows.zip mcp-sync.exe
-          elif [ "${{ matrix.name }}" = "macos" ]; then
-            tar -czf mcp-sync-macos.tar.gz mcp-sync.app
-          fi
+          zip -j mcp-sync-windows.zip mcp-sync.exe
+          ls -lah
+
+      - name: Package binaries - macOS
+        if: matrix.name == 'macos'
+        run: |
+          cd build/bin
+          tar -czf mcp-sync-macos.tar.gz mcp-sync.app
           ls -lah
 
       - name: Upload artifacts
