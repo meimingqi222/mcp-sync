@@ -163,3 +163,12 @@ func (ws *WindowsService) convertToStringSlice(interfaceSlice []interface{}) []s
 	}
 	return result
 }
+
+// ConvertToInterfaceSlice converts string slice to interface slice
+func ConvertToInterfaceSlice(stringSlice []string) []interface{} {
+	result := make([]interface{}, len(stringSlice))
+	for i, v := range stringSlice {
+		result[i] = v
+	}
+	return result
+}

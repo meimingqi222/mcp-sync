@@ -44,7 +44,7 @@ func (cm *ConfigManager) ReadAgentMCPConfig(agentID string) (models.MCPServer, e
 	}
 
 	server := models.MCPServer{
-		ID: agentID,
+		ID:   agentID,
 		Name: agentID,
 	}
 
@@ -65,7 +65,7 @@ func (cm *ConfigManager) WriteAgentMCPConfig(agentID string, servers []models.MC
 
 	// Read existing config or create new
 	var config map[string]interface{}
-	
+
 	if fileExists(configPath) {
 		data, err := ioutil.ReadFile(configPath)
 		if err != nil {
@@ -78,20 +78,80 @@ func (cm *ConfigManager) WriteAgentMCPConfig(agentID string, servers []models.MC
 		config = make(map[string]interface{})
 	}
 
-	// Update mcpServers
-	mcpServersMap := make(map[string]interface{})
-	for _, server := range servers {
+	// Get the agent's config key (could be "mcpServers", "context_servers", etc.)
+	configLoader, err := NewConfigLoader()
+	if err != nil {
+		return err
+	}
+
+	// Find agent ID by matching config path
+	var detectedAgentID string
+	agentDefs := configLoader.GetAgentDefinitions()
+	for _, agent := range agentDefs {
+		paths := configLoader.GetConfigPathsForAgent(agent.ID)
+		for _, path := range paths {
+			if path == configPath {
+				detectedAgentID = agent.ID
+				break
+			}
+		}
+		if detectedAgentID != "" {
+			break
+		}
+	}
+
+	configKey := "mcpServers" // default
+	if detectedAgentID != "" {
+		configKey = configLoader.GetConfigKey(detectedAgentID)
+	}
+
+	// Get existing mcpServers map or create new
+	var existingMcpServers map[string]interface{}
+	if mcpServers, exists := config[configKey]; exists {
+		if mcpServersMap, ok := mcpServers.(map[string]interface{}); ok {
+			existingMcpServers = mcpServersMap
+		}
+	}
+	if existingMcpServers == nil {
+		existingMcpServers = make(map[string]interface{})
+	}
+
+	// Apply Windows transformation if needed
+	windowsSvc := NewWindowsService()
+	transformedServers := servers
+	if windowsSvc.IsWindows() {
+		transformedServers = windowsSvc.ApplyWindowsTransformation(servers, true)
+	}
+
+	// Update mcpServers - merge with existing but override by name
+	for _, server := range transformedServers {
 		if !server.Enabled {
+			// Remove disabled server
+			delete(existingMcpServers, server.Name)
 			continue
 		}
-		mcpServersMap[server.Name] = map[string]interface{}{
+
+		serverConfig := map[string]interface{}{
 			"command": server.Command,
 			"args":    server.Args,
 			"env":     server.Env,
 		}
+
+		// Preserve other fields that might exist in the original config
+		if existingConfig, exists := existingMcpServers[server.Name]; exists {
+			if existingConfigMap, ok := existingConfig.(map[string]interface{}); ok {
+				for key, value := range existingConfigMap {
+					if _, shouldOverride := map[string]bool{"command": true, "args": true, "env": true}[key]; !shouldOverride {
+						serverConfig[key] = value
+					}
+				}
+			}
+		}
+
+		existingMcpServers[server.Name] = serverConfig
 	}
 
-	config["mcpServers"] = mcpServersMap
+	config[configKey] = existingMcpServers
 
 	// Write back
 	data, err := json.MarshalIndent(config, "", "  ")
@@ -100,6 +160,102 @@ func (cm *ConfigManager) WriteAgentMCPConfig(agentID string, servers []models.MC
 	}
 
 	return ioutil.WriteFile(configPath, data, 0644)
+}
+
+func (cm *ConfigManager) GetAgentMCPConfig(agentID string) (map[string]interface{}, error) {
+	configPath, err := cm.detector.GetAgentConfigPath(agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !fileExists(configPath) {
+		return make(map[string]interface{}), nil
+	}
+
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+
+	// Get the correct config key for this agent
+	configLoader, err := NewConfigLoader()
+	if err != nil {
+		return nil, err
+	}
+
+	configKey := configLoader.GetConfigKey(agentID)
+
+	// Apply Windows unwrapping if needed
+	windowsSvc := NewWindowsService()
+	if windowsSvc.IsWindows() {
+		if serversData, exists := config[configKey]; exists {
+			if serverMap, ok := serversData.(map[string]interface{}); ok {
+				// Convert to MCPServer slice for unwrapping
+				var servers []models.MCPServer
+				for serverName, serverConfig := range serverMap {
+					server := models.MCPServer{
+						ID:   serverName,
+						Name: serverName,
+					}
+					if serverMap, ok := serverConfig.(map[string]interface{}); ok {
+						if cmd, ok := serverMap["command"].(string); ok {
+							server.Command = cmd
+						}
+						if args, ok := serverMap["args"].([]interface{}); ok {
+							for _, arg := range args {
+								if argStr, ok := arg.(string); ok {
+									server.Args = append(server.Args, argStr)
+								}
+							}
+						}
+						if env, ok := serverMap["env"].(map[string]interface{}); ok {
+							server.Env = make(map[string]string)
+							for k, v := range env {
+								if strVal, ok := v.(string); ok {
+									server.Env[k] = strVal
+								}
+							}
+						}
+					}
+					servers = append(servers, server)
+				}
+
+				// Apply Windows transformation (unwrap npx commands)
+				servers = windowsSvc.ApplyWindowsTransformation(servers, false)
+
+				// Convert back to config format
+				unwrappedServersData := make(map[string]interface{})
+				for _, server := range servers {
+					serverConfig := make(map[string]interface{})
+					serverConfig["command"] = server.Command
+					if len(server.Args) > 0 {
+						argsInterface := make([]interface{}, len(server.Args))
+						for i, arg := range server.Args {
+							argsInterface[i] = arg
+						}
+						serverConfig["args"] = argsInterface
+					}
+					if len(server.Env) > 0 {
+						envInterface := make(map[string]interface{})
+						for k, v := range server.Env {
+							envInterface[k] = v
+						}
+						serverConfig["env"] = envInterface
+					}
+					unwrappedServersData[server.Name] = serverConfig
+				}
+
+				config[configKey] = unwrappedServersData
+			}
+		}
+	}
+
+	return config, nil
 }
 
 func (cm *ConfigManager) GetAllAgentsConfig() (map[string]interface{}, error) {
@@ -115,7 +271,7 @@ func (cm *ConfigManager) GetAllAgentsConfig() (map[string]interface{}, error) {
 			continue
 		}
 
-		config, err := cm.ReadAgentMCPConfig(agent.ID)
+		config, err := cm.GetAgentMCPConfig(agent.ID)
 		if err != nil {
 			continue
 		}
@@ -149,7 +305,7 @@ func (cm *ConfigManager) ImportConfigFromJSON(data []byte) ([]models.MCPServer, 
 func (cm *ConfigManager) MergeConfigs(local, remote []models.MCPServer) ([]models.MCPServer, []string, error) {
 	// Simple merge strategy: remote overwrites local
 	// Returns merged config and list of conflicts
-	
+
 	localMap := make(map[string]models.MCPServer)
 	for _, s := range local {
 		localMap[s.ID] = s

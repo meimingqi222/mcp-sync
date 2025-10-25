@@ -58,19 +58,19 @@ type WindowsKeyring struct{}
 func (wk *WindowsKeyring) SetKey(service, keyName string, keyData []byte) error {
 	// 在实际的Windows实现中，这将调用DPAPI
 	// 这里使用文件存储作为fallback，并建议在实际生产环境中使用DPAPI
-	
+
 	dir := os.Getenv("APPDATA")
 	if dir == "" {
 		return fmt.Errorf("APPDATA environment variable not set")
 	}
-	
+
 	keyringDir := fmt.Sprintf("%s\\mcp-sync\\keyring", dir)
 	if err := os.MkdirAll(keyringDir, 0700); err != nil {
 		return fmt.Errorf("failed to create keyring directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s\\%s_%s.key", keyringDir, service, keyName)
-	
+
 	// 简单地存储密钥（实际应该使用DPAPI加密）
 	return os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(keyData)), 0600)
 }
@@ -80,14 +80,14 @@ func (wk *WindowsKeyring) GetKey(service, keyName string) ([]byte, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("APPDATA environment variable not set")
 	}
-	
+
 	keyFile := fmt.Sprintf("%s\\mcp-sync\\keyring\\%s_%s.key", dir, service, keyName)
-	
+
 	data, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key file: %w", err)
 	}
-	
+
 	return base64.StdEncoding.DecodeString(string(data))
 }
 
@@ -96,13 +96,13 @@ func (wk *WindowsKeyring) DeleteKey(service, keyName string) error {
 	if dir == "" {
 		return fmt.Errorf("APPDATA environment variable not set")
 	}
-	
+
 	keyFile := fmt.Sprintf("%s\\mcp-sync\\keyring\\%s_%s.key", dir, service, keyName)
-	
+
 	if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete key file: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -112,19 +112,19 @@ type MacOSKeyring struct{}
 func (mk *MacOSKeyring) SetKey(service, keyName string, keyData []byte) error {
 	// 在实际的macOS实现中，这将调用Keychain API
 	// 这里使用文件存储作为fallback
-	
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyringDir := fmt.Sprintf("%s/.local/share/mcp-sync/keyring", home)
 	if err := os.MkdirAll(keyringDir, 0700); err != nil {
 		return fmt.Errorf("failed to create keyring directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/%s_%s.key", keyringDir, service, keyName)
-	
+
 	return os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(keyData)), 0600)
 }
 
@@ -133,14 +133,14 @@ func (mk *MacOSKeyring) GetKey(service, keyName string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/.local/share/mcp-sync/keyring/%s_%s.key", home, service, keyName)
-	
+
 	data, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key file: %w", err)
 	}
-	
+
 	return base64.StdEncoding.DecodeString(string(data))
 }
 
@@ -149,13 +149,13 @@ func (mk *MacOSKeyring) DeleteKey(service, keyName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/.local/share/mcp-sync/keyring/%s_%s.key", home, service, keyName)
-	
+
 	if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete key file: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -165,19 +165,19 @@ type LinuxKeyring struct{}
 func (lk *LinuxKeyring) SetKey(service, keyName string, keyData []byte) error {
 	// 在实际的Linux实现中，这将使用libsecret或其他密钥环服务
 	// 这里使用文件存储作为fallback
-	
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyringDir := fmt.Sprintf("%s/.local/share/mcp-sync/keyring", home)
 	if err := os.MkdirAll(keyringDir, 0700); err != nil {
 		return fmt.Errorf("failed to create keyring directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/%s_%s.key", keyringDir, service, keyName)
-	
+
 	return os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(keyData)), 0600)
 }
 
@@ -186,14 +186,14 @@ func (lk *LinuxKeyring) GetKey(service, keyName string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/.local/share/mcp-sync/keyring/%s_%s.key", home, service, keyName)
-	
+
 	data, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key file: %w", err)
 	}
-	
+
 	return base64.StdEncoding.DecodeString(string(data))
 }
 
@@ -202,12 +202,12 @@ func (lk *LinuxKeyring) DeleteKey(service, keyName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	
+
 	keyFile := fmt.Sprintf("%s/.local/share/mcp-sync/keyring/%s_%s.key", home, service, keyName)
-	
+
 	if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete key file: %w", err)
 	}
-	
+
 	return nil
 }
