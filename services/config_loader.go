@@ -44,13 +44,17 @@ type ConfigLoader struct {
 }
 
 func NewConfigLoader() (*ConfigLoader, error) {
-	// Try to load from embedded file first
-	data, err := configFS.ReadFile("agents.yaml")
+	// Try to load from disk first (for development)
+	data, err := os.ReadFile("services/agents.yaml")
 	if err != nil {
-		// Try to load from disk in current directory
+		// Try current directory
 		data, err = os.ReadFile("agents.yaml")
 		if err != nil {
-			return nil, fmt.Errorf("failed to load agents.yaml: %w", err)
+			// Fall back to embedded file
+			data, err = configFS.ReadFile("agents.yaml")
+			if err != nil {
+				return nil, fmt.Errorf("failed to load agents.yaml: %w", err)
+			}
 		}
 	}
 

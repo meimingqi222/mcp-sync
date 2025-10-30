@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/tmp/**)",
+      "Bash(find . -name \"*.go\" -type f -exec grep -l \"TODO\\|FIXME\\|XXX\\|BUG\\|HACK\" {})"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

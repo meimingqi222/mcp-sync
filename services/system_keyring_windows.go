@@ -13,6 +13,7 @@ import (
 // WindowsKeyring 使用Windows DPAPI存储密钥
 type WindowsKeyring struct{}
 
+// SetKey 将指定服务的密钥使用Windows DPAPI加密并保存到APPDATA目录下的keyring文件
 func (wk *WindowsKeyring) SetKey(service, keyName string, keyData []byte) error {
 	// 使用DPAPI加密密钥数据
 	encrypted, err := dpapi.EncryptBytes(keyData)

@@ -21,6 +21,8 @@ type AppService struct {
 	storage       *StorageService
 	securityMgr   *SecurityManager
 	windowsSvc    *WindowsService
+	converter     *ConfigConverter
+	tomlAdapter   *TOMLAdapter
 }
 
 func NewAppService() (*AppService, error) {
@@ -49,6 +51,9 @@ func NewAppService() (*AppService, error) {
 	// 创建安全管理器（使用 gist ID 作为加密密钥的一部分）
 	securityMgr := NewSecurityManager(homeDir)
 
+	converter := NewConfigConverter(configLoader)
+	tomlAdapter := NewTOMLAdapter()
+
 	return &AppService{
 		detector:      NewAgentDetector(),
 		configManager: NewConfigManager(),
@@ -56,6 +61,8 @@ func NewAppService() (*AppService, error) {
 		storage:       storage,
 		securityMgr:   securityMgr,
 		windowsSvc:    NewWindowsService(),
+		converter:     converter,
+		tomlAdapter:   tomlAdapter,
 	}, nil
 }
 
@@ -440,7 +447,21 @@ func (as *AppService) GetAgentMCPConfig(agentID string) (map[string]interface{},
 		return nil, err
 	}
 
-	// Read the config file
+	// Check if this is a TOML format (Codex)
+	format := as.configLoader.GetFormat(agentID)
+	if format == "codex_toml" {
+		// Use TOML adapter for Codex
+		servers, err := as.tomlAdapter.GetMCPServersAsStandard(configPath)
+		if err != nil {
+			return nil, err
+		}
+		keyName := as.configLoader.GetConfigKey(agentID)
+		return map[string]interface{}{
+			keyName: servers,
+		}, nil
+	}
+
+	// Read the config file (JSON format)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -483,7 +504,22 @@ func (as *AppService) SaveAgentMCPConfig(agentID string, mcpServersConfig map[st
 		return err
 	}
 
-	// Read the full config file first
+	// Check if this is a TOML format (Codex)
+	format := as.configLoader.GetFormat(agentID)
+	if format == "codex_toml" {
+		// Extract servers from input config
+		keyName := as.configLoader.GetConfigKey(agentID)
+		var servers map[string]interface{}
+		if serversInterface, ok := mcpServersConfig[keyName]; ok {
+			if serversMap, ok := serversInterface.(map[string]interface{}); ok {
+				servers = serversMap
+			}
+		}
+		// Use TOML adapter for Codex
+		return as.tomlAdapter.SetMCPServersFromStandard(configPath, servers)
+	}
+
+	// Read the full config file first (JSON format)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
@@ -631,6 +667,22 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 	if err != nil {
 		return fmt.Errorf("failed to read source agent config: %w", err)
 	}
+	
+	// Debug: show initial read data
+	sourceKeyDebug := as.configLoader.GetConfigKey(sourceAgentID)
+	if serversData, ok := sourceConfig[sourceKeyDebug]; ok {
+		if serverMap, ok := serversData.(map[string]interface{}); ok {
+			println(fmt.Sprintf("[Debug] 初始读取到 %d 个服务器", len(serverMap)))
+			for name, serverInterface := range serverMap {
+				if sc, ok := serverInterface.(map[string]interface{}); ok {
+					println(fmt.Sprintf("  服务器 '%s': %d 个字段", name, len(sc)))
+					for key := range sc {
+						println(fmt.Sprintf("    - %s", key))
+					}
+				}
+			}
+		}
+	}
 
 	// Unwrap Windows-specific commands from source if it's already wrapped
 	if as.windowsSvc.IsWindows() {
@@ -674,30 +726,53 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 
 		// Convert to MCPServer slice, apply transformation, and convert back
 		servers := as.convertServersDataToMCPServers(serversData)
+		println(fmt.Sprintf("  [转换前] %d 个服务器", len(servers)))
+		for _, s := range servers {
+			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
+		}
+		
 		servers = as.windowsSvc.ApplyWindowsTransformation(servers, true)
+		
+		println(fmt.Sprintf("  [转换后] %d 个服务器", len(servers)))
+		for _, s := range servers {
+			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
+		}
+		
 		serversData = as.convertMCPServersToServersData(servers)
 
 		println("  Windows npx 命令转换完成")
 	}
 
+	// Normalize format names (codex_toml is already converted to standard by GetAgentMCPConfig)
+	normalizedSourceFormat := sourceFormat
+	normalizedTargetFormat := targetFormat
+	if normalizedSourceFormat == "codex_toml" {
+		normalizedSourceFormat = "standard"
+	}
+	if normalizedTargetFormat == "codex_toml" {
+		normalizedTargetFormat = "standard"
+	}
+
 	// Convert format if needed
-	if sourceFormat != targetFormat {
-		println(fmt.Sprintf("  转换格式: %s -> %s", sourceFormat, targetFormat))
+	if normalizedSourceFormat != normalizedTargetFormat {
+		println(fmt.Sprintf("  转换格式: %s -> %s", normalizedSourceFormat, normalizedTargetFormat))
 
 		// Try to use the configuration-based transform rule first
-		transformRule := as.configLoader.GetTransformRule(sourceFormat, targetFormat)
+		transformRule := as.configLoader.GetTransformRule(normalizedSourceFormat, normalizedTargetFormat)
 		if transformRule != nil {
 			serversData = as.configLoader.ApplyTransformRule(serversData, transformRule)
 			println(fmt.Sprintf("  使用配置规则进行转换"))
 		} else {
 			// Fall back to hardcoded conversions
 			println(fmt.Sprintf("  未找到配置规则，使用内置转换"))
-			if sourceFormat == "standard" && targetFormat == "zed" {
+			if normalizedSourceFormat == "standard" && normalizedTargetFormat == "zed" {
 				serversData = convertStandardToZed(serversData)
-			} else if sourceFormat == "zed" && targetFormat == "standard" {
+			} else if normalizedSourceFormat == "zed" && normalizedTargetFormat == "standard" {
 				serversData = convertZedToStandard(serversData)
 			}
 		}
+	} else {
+		println("  格式相同,无需转换")
 	}
 
 	// Save to target agent with appropriate key name
@@ -721,19 +796,33 @@ func (as *AppService) convertServersDataToMCPServers(serversData interface{}) []
 				if cmd, ok := serverMap["command"].(string); ok {
 					server.Command = cmd
 				}
-				if args, ok := serverMap["args"].([]interface{}); ok {
-					for _, arg := range args {
-						if argStr, ok := arg.(string); ok {
-							server.Args = append(server.Args, argStr)
+				
+				// Handle args - support both []interface{} and []string
+				if argsInterface, ok := serverMap["args"]; ok {
+					switch args := argsInterface.(type) {
+					case []interface{}:
+						for _, arg := range args {
+							if argStr, ok := arg.(string); ok {
+								server.Args = append(server.Args, argStr)
+							}
 						}
+					case []string:
+						server.Args = args
 					}
 				}
-				if env, ok := serverMap["env"].(map[string]interface{}); ok {
-					server.Env = make(map[string]string)
-					for k, v := range env {
-						if strVal, ok := v.(string); ok {
-							server.Env[k] = strVal
+				
+				// Handle env - support both map[string]interface{} and map[string]string
+				if envInterface, ok := serverMap["env"]; ok {
+					switch env := envInterface.(type) {
+					case map[string]interface{}:
+						server.Env = make(map[string]string)
+						for k, v := range env {
+							if strVal, ok := v.(string); ok {
+								server.Env[k] = strVal
+							}
 						}
+					case map[string]string:
+						server.Env = env
 					}
 				}
 			}
@@ -765,6 +854,36 @@ func (as *AppService) convertMCPServersToServersData(servers []models.MCPServer)
 		serversData[server.Name] = serverConfig
 	}
 	return serversData
+}
+
+// ConvertAgentConfig converts MCP config from one agent format to another
+func (as *AppService) ConvertAgentConfig(sourceAgentID, targetAgentID string, sourceConfig map[string]interface{}) (*ConversionResult, error) {
+	return as.converter.ConvertAgentConfig(sourceAgentID, targetAgentID, sourceConfig)
+}
+
+// ConvertToCodex converts any agent config to Codex format
+func (as *AppService) ConvertToCodex(sourceAgentID string, sourceConfig map[string]interface{}) (*ConversionResult, error) {
+	return as.converter.ConvertToCodex(sourceAgentID, sourceConfig)
+}
+
+// ConvertFromCodex converts Codex config to any agent format
+func (as *AppService) ConvertFromCodex(targetAgentID string, codexConfig map[string]interface{}) (*ConversionResult, error) {
+	return as.converter.ConvertFromCodex(targetAgentID, codexConfig)
+}
+
+// BatchConvertConfig converts config to multiple target formats
+func (as *AppService) BatchConvertConfig(sourceAgentID string, sourceConfig map[string]interface{}, targetAgentIDs []string) ([]*ConversionResult, error) {
+	return as.converter.BatchConvertConfig(sourceAgentID, sourceConfig, targetAgentIDs)
+}
+
+// ValidateConfigFormat validates if a config matches expected format
+func (as *AppService) ValidateConfigFormat(agentID string, config map[string]interface{}) (bool, []string) {
+	return as.converter.ValidateConfigFormat(agentID, config)
+}
+
+// ExportConversionAsJSON exports a conversion result as JSON string
+func (as *AppService) ExportConversionAsJSON(result *ConversionResult) (string, error) {
+	return as.converter.ExportConversionAsJSON(result)
 }
 
 // GetGistSecurityWarnings 获取 Gist 同步的安全警告

@@ -3,6 +3,7 @@ module mcp-sync
 go 1.23
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/billgraziano/dpapi v0.5.0
 	github.com/wailsapp/wails/v2 v2.10.2
 	github.com/zalando/go-keyring v0.2.6

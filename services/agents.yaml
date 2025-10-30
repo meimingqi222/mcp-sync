@@ -196,3 +196,19 @@ agents:
           - ~/.iflow/settings.json
     config_key: mcpServers
     format: standard
+
+  - id: codex
+    name: Codex AI
+    description: OpenAI Codex CLI
+    platforms:
+      windows:
+        config_paths:
+          - ~/.codex/config.toml
+      darwin:
+        config_paths:
+          - ~/.codex/config.toml
+      linux:
+        config_paths:
+          - ~/.codex/config.toml
+    config_key: mcp_servers
+    format: codex_toml

@@ -135,6 +135,36 @@ func (a *App) ResolveConflict(conflictType string, resolution string) error {
 	return a.appService.ResolveConflict(conflictType, resolution)
 }
 
+// ConvertAgentConfig converts MCP config from one agent format to another
+func (a *App) ConvertAgentConfig(sourceAgentID, targetAgentID string, sourceConfig map[string]interface{}) (*services.ConversionResult, error) {
+	return a.appService.ConvertAgentConfig(sourceAgentID, targetAgentID, sourceConfig)
+}
+
+// ConvertToCodex converts any agent's config to Codex format
+func (a *App) ConvertToCodex(sourceAgentID string, sourceConfig map[string]interface{}) (*services.ConversionResult, error) {
+	return a.appService.ConvertToCodex(sourceAgentID, sourceConfig)
+}
+
+// ConvertFromCodex converts Codex config to any agent format
+func (a *App) ConvertFromCodex(targetAgentID string, codexConfig map[string]interface{}) (*services.ConversionResult, error) {
+	return a.appService.ConvertFromCodex(targetAgentID, codexConfig)
+}
+
+// BatchConvertConfig converts config to multiple target formats
+func (a *App) BatchConvertConfig(sourceAgentID string, sourceConfig map[string]interface{}, targetAgentIDs []string) ([]*services.ConversionResult, error) {
+	return a.appService.BatchConvertConfig(sourceAgentID, sourceConfig, targetAgentIDs)
+}
+
+// ValidateConfigFormat validates if a config matches expected format
+func (a *App) ValidateConfigFormat(agentID string, config map[string]interface{}) (bool, []string) {
+	return a.appService.ValidateConfigFormat(agentID, config)
+}
+
+// ExportConversionAsJSON exports a conversion result as JSON string
+func (a *App) ExportConversionAsJSON(result *services.ConversionResult) (string, error) {
+	return a.appService.ExportConversionAsJSON(result)
+}
+
 // Greet returns a greeting for the given name (kept for compatibility)
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
