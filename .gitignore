@@ -104,6 +104,10 @@ wailselite/
 # IDE & Editors
 # -------------------
 
+# AI Assistants
+.claude/
+WARP.md
+
 # VS Code
 .vscode/
 !.vscode/settings.json
