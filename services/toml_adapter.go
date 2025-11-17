@@ -163,6 +163,7 @@ func (ta *TOMLAdapter) CodexToStandard(codexServers map[string]CodexMCPServer) m
 }
 
 // StandardToCodex converts standard JSON MCP servers to Codex TOML format
+// Note: Codex only supports stdio transport. HTTP/SSE servers will be skipped.
 func (ta *TOMLAdapter) StandardToCodex(standardServers map[string]interface{}) map[string]CodexMCPServer {
 	result := make(map[string]CodexMCPServer)
 
@@ -170,6 +171,14 @@ func (ta *TOMLAdapter) StandardToCodex(standardServers map[string]interface{}) m
 		serverMap, ok := serverInterface.(map[string]interface{})
 		if !ok {
 			continue
+		}
+
+		// Check if this is an HTTP or SSE server - Codex doesn't support these
+		if serverType, hasType := serverMap["type"].(string); hasType {
+			if serverType == "http" || serverType == "sse" {
+				println(fmt.Sprintf("[TOML] Skipping server '%s': Codex does not support %s transport (only stdio is supported)", name, serverType))
+				continue
+			}
 		}
 
 		server := CodexMCPServer{}
@@ -259,8 +268,16 @@ func (ta *TOMLAdapter) SetMCPServersFromStandard(filePath string, standardServer
 	}
 
 	// Convert and update MCP servers
+	originalCount := len(standardServers)
 	config.MCPServers = ta.StandardToCodex(standardServers)
-	println(fmt.Sprintf("Updated MCP servers count: %d", len(config.MCPServers)))
+	convertedCount := len(config.MCPServers)
+	skippedCount := originalCount - convertedCount
+	
+	if skippedCount > 0 {
+		println(fmt.Sprintf("[Warning] Skipped %d HTTP/SSE servers (Codex only supports stdio)", skippedCount))
+	}
+	println(fmt.Sprintf("Updated MCP servers count: %d (original: %d, skipped: %d)", 
+		convertedCount, originalCount, skippedCount))
 
 	// Write back to file
 	println("Writing config back to file...")
