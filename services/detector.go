@@ -68,6 +68,10 @@ func (ad *AgentDetector) GetAgentConfigPath(agentID string) (string, error) {
 	return ad.configLoader.GetFirstExistingPath(agentID)
 }
 
+func (ad *AgentDetector) GetAllAgentConfigPaths(agentID string) ([]string, error) {
+	return ad.configLoader.GetExistingConfigPaths(agentID), nil
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

@@ -116,10 +116,10 @@ func (cm *ConfigManager) WriteAgentMCPConfig(agentID string, servers []models.MC
 		existingMcpServers = make(map[string]interface{})
 	}
 
-	// Apply Windows transformation if needed
+	// Apply Windows transformation if needed (but NOT for WSL paths)
 	windowsSvc := NewWindowsService()
 	transformedServers := servers
-	if windowsSvc.IsWindows() {
+	if windowsSvc.ShouldApplyWindowsTransformation(configPath) {
 		transformedServers = windowsSvc.ApplyWindowsTransformation(servers, true)
 	}
 

@@ -19,6 +19,27 @@ func (ws *WindowsService) IsWindows() bool {
 	return runtime.GOOS == "windows"
 }
 
+// IsWSLPath checks if a path is a WSL path (e.g., \\wsl.localhost\ or \\wsl$\)
+// WSL paths point to Linux environments, so they should NOT use cmd /c wrapping
+func (ws *WindowsService) IsWSLPath(path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasPrefix(lowerPath, "\\\\wsl.localhost\\") ||
+		strings.HasPrefix(lowerPath, "\\\\wsl$\\")
+}
+
+// ShouldApplyWindowsTransformation checks if Windows transformation should be applied
+// Returns false for WSL paths since they run in a Linux environment
+func (ws *WindowsService) ShouldApplyWindowsTransformation(configPath string) bool {
+	if !ws.IsWindows() {
+		return false
+	}
+	// WSL paths should NOT have Windows transformation applied
+	if ws.IsWSLPath(configPath) {
+		return false
+	}
+	return true
+}
+
 // WrapNpxCommand wraps npx commands with cmd /c for Windows compatibility
 func (ws *WindowsService) WrapNpxCommand(command string, args []interface{}) (string, []interface{}) {
 	if !ws.IsWindows() {

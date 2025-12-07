@@ -54,6 +54,11 @@ func (a *App) GetSyncConfig() (models.SyncConfig, error) {
 	return a.appService.GetSyncConfig()
 }
 
+// GetSyncReadyStatus checks if sync is fully configured and ready to use
+func (a *App) GetSyncReadyStatus() (*services.SyncReadyStatus, error) {
+	return a.appService.GetSyncReadyStatus()
+}
+
 // SaveSyncConfig saves the sync configuration
 func (a *App) SaveSyncConfig(config models.SyncConfig) error {
 	return a.appService.SaveSyncConfig(config)

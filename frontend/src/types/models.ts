@@ -66,6 +66,7 @@ export interface AgentDiff {
   local_only: MCPServer[]
   remote_only: MCPServer[]
   conflicts: ServerConflict[]
+  not_installed?: boolean // True if agent exists only in remote (not installed locally)
 }
 
 export interface ConflictDetails {

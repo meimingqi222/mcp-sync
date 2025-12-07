@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 
@@ -40,7 +41,9 @@ type AgentsConfig struct {
 }
 
 type ConfigLoader struct {
-	config *AgentsConfig
+	config      *AgentsConfig
+	wslDistros  []string
+	wslHomeDirs map[string]string
 }
 
 func NewConfigLoader() (*ConfigLoader, error) {
@@ -121,6 +124,21 @@ func (cl *ConfigLoader) GetConfigPathsForAgent(agentID string) []string {
 	for _, path := range platformConfig.ConfigPaths {
 		expandedPath := cl.ExpandPath(path)
 		expandedPaths = append(expandedPaths, expandedPath)
+	}
+
+	// On Windows, also check for WSL paths if available
+	if goos == "windows" {
+		// Ensure WSL info is loaded
+		cl.detectWSLDistros()
+
+		if linuxConfig, ok := agent.Platforms["linux"]; ok {
+			for _, distro := range cl.wslDistros {
+				for _, linuxPath := range linuxConfig.ConfigPaths {
+					wslPath := cl.convertToWSLPath(distro, linuxPath)
+					expandedPaths = append(expandedPaths, wslPath)
+				}
+			}
+		}
 	}
 
 	return expandedPaths
@@ -345,4 +363,84 @@ func (cl *ConfigLoader) ApplyTransformRule(data interface{}, rule *TransformRule
 	}
 
 	return result
+}
+
+// detectWSLDistros returns a list of installed WSL distributions
+func (cl *ConfigLoader) detectWSLDistros() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	// Only detect once
+	if cl.wslDistros != nil {
+		return
+	}
+	cl.wslDistros = []string{}
+	cl.wslHomeDirs = make(map[string]string)
+
+	cmd := exec.Command("wsl", "-l", "-q")
+	// Hide window
+	// cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	output, err := cmd.Output()
+	if err != nil {
+		// WSL likely not installed or fails
+		return
+	}
+
+	// Parse output (UTF-16LE handling might be needed but -l -q usually returns ASCII/UTF-8 compatible text in Go exec)
+	// Actually wsl -l -q outputs UTF-16LE bytes which Go treats as separate null bytes if interpreted as UTF-8
+	// Simple hack: remove null bytes and trim spaces
+	cleanOutput := strings.Map(func(r rune) rune {
+		if r == 0 {
+			return -1
+		}
+		return r
+	}, string(output))
+
+	lines := strings.Split(cleanOutput, "\n")
+	for _, line := range lines {
+		distro := strings.TrimSpace(line)
+		if distro != "" {
+			cl.wslDistros = append(cl.wslDistros, distro)
+
+			// Resolve Home Dir for this distro
+			homeCmd := exec.Command("wsl", "-d", distro, "sh", "-c", "echo $HOME")
+			homeOut, err := homeCmd.Output()
+			if err == nil {
+				homeDir := strings.TrimSpace(string(homeOut))
+				cl.wslHomeDirs[distro] = homeDir
+			}
+		}
+	}
+}
+
+// convertToWSLPath converts a linux path to a Windows UNC path for a specific distro
+func (cl *ConfigLoader) convertToWSLPath(distro, linuxPath string) string {
+	homeDir, ok := cl.wslHomeDirs[distro]
+	if !ok {
+		// Fallback detection if missing
+		homeDir = "/root"
+	}
+
+	var targetPath string
+	if strings.HasPrefix(linuxPath, "~") {
+		targetPath = strings.Replace(linuxPath, "~", homeDir, 1)
+	} else if strings.HasPrefix(linuxPath, "$HOME") {
+		targetPath = strings.Replace(linuxPath, "$HOME", homeDir, 1)
+	} else {
+		targetPath = linuxPath
+	}
+
+	// Construct UNC path: \\wsl.localhost\<distro>\<path>
+	// Note: Windows uses backslashes, but inside the share path forward slashes usually work or need conversion
+	// \\wsl.localhost\Ubuntu\home\user\.config...
+
+	// Ensure path starts with / for joining
+	if !strings.HasPrefix(targetPath, "/") {
+		targetPath = "/" + targetPath
+	}
+
+	// Convert forward slashes to backslashes for Windows path compatibility
+	winPath := strings.ReplaceAll(targetPath, "/", "\\")
+
+	return fmt.Sprintf("\\\\wsl.localhost\\%s%s", distro, winPath)
 }

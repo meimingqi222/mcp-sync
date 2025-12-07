@@ -74,10 +74,11 @@ type ConflictDetails struct {
 }
 
 type AgentDiff struct {
-	AgentID    string           `json:"agent_id"`
-	LocalOnly  []MCPServer      `json:"local_only"`
-	RemoteOnly []MCPServer      `json:"remote_only"`
-	Conflicts  []ServerConflict `json:"conflicts"`
+	AgentID      string           `json:"agent_id"`
+	LocalOnly    []MCPServer      `json:"local_only"`
+	RemoteOnly   []MCPServer      `json:"remote_only"`
+	Conflicts    []ServerConflict `json:"conflicts"`
+	NotInstalled bool             `json:"not_installed"` // True if agent exists only in remote (not installed locally)
 }
 
 type ServerConflict struct {

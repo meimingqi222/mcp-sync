@@ -238,10 +238,33 @@ func (as *AppService) PushAllAgentsToGist() error {
 		return fmt.Errorf("failed to detect agents: %w", err)
 	}
 
-	// Prepare a map of all agent configs to push
-	allAgentConfigs := make(map[string]interface{})
-	pushedCount := 0
+	// CRITICAL FIX: First fetch remote configs to preserve agents not installed locally
+	// This prevents cross-device data loss where uninstalled agents' configs would be deleted
+	remoteConfigs, err := as.gistSync.PullAgentConfigsFromGist()
+	if err != nil {
+		// If Gist is not found (404) or empty, start with empty map
+		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") ||
+			strings.Contains(err.Error(), "mcp-config.json not found") {
+			remoteConfigs = make(map[string]interface{})
+			println("No existing remote config found, starting fresh")
+		} else {
+			return fmt.Errorf("failed to fetch remote configs before push: %w", err)
+		}
+	}
 
+	// Start with remote configs to preserve agents not installed locally
+	allAgentConfigs := make(map[string]interface{})
+	preservedCount := 0
+	for agentID, config := range remoteConfigs {
+		allAgentConfigs[agentID] = config
+		preservedCount++
+	}
+	if preservedCount > 0 {
+		println(fmt.Sprintf("Preserved %d agent configs from remote (may include agents not installed locally)", preservedCount))
+	}
+
+	// Now overlay with local detected agents (local takes precedence for installed agents)
+	pushedCount := 0
 	for _, agent := range agents {
 		if agent.Status == "detected" {
 			agentConfig, err := as.GetAgentMCPConfig(agent.ID)
@@ -250,7 +273,7 @@ func (as *AppService) PushAllAgentsToGist() error {
 				continue
 			}
 
-			// Store the COMPLETE config for this agent
+			// Store the COMPLETE config for this agent (overwrites remote if exists)
 			allAgentConfigs[agent.ID] = agentConfig
 			pushedCount++
 			println(fmt.Sprintf("Collected complete config from agent: %s", agent.ID))
@@ -495,6 +518,84 @@ func (as *AppService) GetSyncConfig() (models.SyncConfig, error) {
 	return as.storage.LoadSyncConfig()
 }
 
+// SyncReadyStatus represents the complete sync configuration status
+type SyncReadyStatus struct {
+	Ready           bool     `json:"ready"`            // True if sync is fully configured and ready
+	HasToken        bool     `json:"has_token"`        // Has GitHub token
+	HasGistID       bool     `json:"has_gist_id"`      // Has Gist ID
+	EncryptionReady bool     `json:"encryption_ready"` // Encryption is properly configured
+	Message         string   `json:"message"`          // Human-readable status message
+	MissingItems    []string `json:"missing_items"`    // List of missing configuration items
+}
+
+// GetSyncReadyStatus checks if sync is fully configured and ready to use
+// This performs a complete check including encryption status
+func (as *AppService) GetSyncReadyStatus() (*SyncReadyStatus, error) {
+	config, err := as.storage.LoadSyncConfig()
+	if err != nil {
+		return &SyncReadyStatus{
+			Ready:   false,
+			Message: "Failed to load sync configuration",
+		}, nil
+	}
+
+	status := &SyncReadyStatus{
+		HasToken:     config.GitHubToken != "",
+		HasGistID:    config.GistID != "",
+		MissingItems: []string{},
+	}
+
+	// Check GitHub Token
+	if !status.HasToken {
+		status.MissingItems = append(status.MissingItems, "GitHub Token")
+	}
+
+	// Check Gist ID
+	if !status.HasGistID {
+		status.MissingItems = append(status.MissingItems, "Gist ID")
+	}
+
+	// Check Encryption (CRITICAL: Gist sync requires encryption)
+	// Encryption is ready if:
+	// 1. EnableEncryption is true AND
+	// 2. Either GistEncryptionPassword is set OR system crypto is available
+	if config.EnableEncryption {
+		hasPassword := config.GistEncryptionPassword != "" || config.EncryptionPassword != ""
+
+		// Also check if system crypto (SecureCrypto) is available
+		crypto, cryptoErr := NewSecureCrypto()
+		hasSystemCrypto := cryptoErr == nil && crypto != nil && crypto.IsEnabled()
+
+		status.EncryptionReady = hasPassword || hasSystemCrypto
+	} else {
+		status.EncryptionReady = false
+	}
+
+	if !status.EncryptionReady {
+		status.MissingItems = append(status.MissingItems, "Encryption Password")
+	}
+
+	// Determine overall readiness
+	status.Ready = status.HasToken && status.HasGistID && status.EncryptionReady
+
+	// Generate message
+	if status.Ready {
+		status.Message = "Sync is fully configured and ready"
+	} else if len(status.MissingItems) > 0 {
+		status.Message = fmt.Sprintf("Missing configuration: %s", strings.Join(status.MissingItems, ", "))
+	} else {
+		status.Message = "Sync is not configured"
+	}
+
+	return status, nil
+}
+
+// ResetEncryptedConfig resets encrypted config when decryption fails
+// This backs up the corrupted file and allows user to reconfigure
+func (as *AppService) ResetEncryptedConfig() error {
+	return as.storage.ResetEncryptedConfig()
+}
+
 // SaveSyncConfig saves the sync configuration
 func (as *AppService) SaveSyncConfig(config models.SyncConfig) error {
 	// Auto-detect existing Gist if ID is missing but token is provided
@@ -592,95 +693,160 @@ func (as *AppService) GetAgentMCPConfig(agentID string) (map[string]interface{},
 }
 
 func (as *AppService) SaveAgentMCPConfig(agentID string, mcpServersConfig map[string]interface{}) error {
-	configPath, err := as.detector.GetAgentConfigPath(agentID)
-	if err != nil {
-		return err
+	configPaths, err := as.detector.GetAllAgentConfigPaths(agentID)
+	// If no existing paths found, try to get at least one default path to create
+	if err != nil || len(configPaths) == 0 {
+		defaultPath, err := as.detector.GetAgentConfigPath(agentID)
+		if err != nil {
+			return err
+		}
+		configPaths = []string{defaultPath}
 	}
 
-	// Check if this is a TOML format (Codex)
-	format := as.configLoader.GetFormat(agentID)
-	if format == "codex_toml" {
-		// Extract servers from input config
-		keyName := as.configLoader.GetConfigKey(agentID)
-		var servers map[string]interface{}
-		if serversInterface, ok := mcpServersConfig[keyName]; ok {
-			if serversMap, ok := serversInterface.(map[string]interface{}); ok {
-				servers = serversMap
+	var errorMessages []string
+
+	for _, configPath := range configPaths {
+		// Check if this is a TOML format (Codex)
+		format := as.configLoader.GetFormat(agentID)
+		if format == "codex_toml" {
+			// Extract servers from input config
+			keyName := as.configLoader.GetConfigKey(agentID)
+			var servers map[string]interface{}
+			if serversInterface, ok := mcpServersConfig[keyName]; ok {
+				if serversMap, ok := serversInterface.(map[string]interface{}); ok {
+					servers = serversMap
+				}
+			}
+
+			// Apply Windows-specific transformation based on this specific path
+			// Windows paths: wrap npx with cmd /c
+			// WSL paths: UNWRAP cmd /c to get bare npx (source may already have cmd /c from Windows)
+			if as.windowsSvc.ShouldApplyWindowsTransformation(configPath) {
+				println(fmt.Sprintf("  [%s] 应用 Windows npx 命令转换 (wrap)", configPath))
+				// Convert to MCPServer slice, apply transformation, and convert back
+				mcpServers := as.convertServersDataToMCPServers(servers)
+				mcpServers = as.windowsSvc.ApplyWindowsTransformation(mcpServers, true)
+				servers = as.convertMCPServersToServersData(mcpServers)
+			} else if as.windowsSvc.IsWindows() && as.windowsSvc.IsWSLPath(configPath) {
+				println(fmt.Sprintf("  [%s] WSL环境，解包 Windows cmd /c 命令", configPath))
+				// WSL is Linux - UNWRAP any cmd /c wrappers from the source config
+				mcpServers := as.convertServersDataToMCPServers(servers)
+				mcpServers = as.windowsSvc.ApplyWindowsTransformation(mcpServers, false) // false = unwrap
+				servers = as.convertMCPServersToServersData(mcpServers)
+			}
+
+			// Use TOML adapter for Codex
+			if err := as.tomlAdapter.SetMCPServersFromStandard(configPath, servers); err != nil {
+				errorMessages = append(errorMessages, fmt.Sprintf("failed to save to %s: %v", configPath, err))
+			}
+			continue
+		}
+
+		// Read the full config file first (JSON format)
+		// If file doesn't exist, create an empty map
+		var fullConfig map[string]interface{}
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				fullConfig = make(map[string]interface{})
+			} else {
+				errorMessages = append(errorMessages, fmt.Sprintf("failed to read %s: %v", configPath, err))
+				continue
+			}
+		} else {
+			// Remove comments if present
+			dataStr := string(data)
+			lines := strings.Split(dataStr, "\n")
+			var cleanedLines []string
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if !strings.HasPrefix(trimmed, "//") {
+					cleanedLines = append(cleanedLines, line)
+				}
+			}
+			cleanedData := []byte(strings.Join(cleanedLines, "\n"))
+
+			if err := json.Unmarshal(cleanedData, &fullConfig); err != nil {
+				errorMessages = append(errorMessages, fmt.Sprintf("failed to parse %s: %v", configPath, err))
+				continue
 			}
 		}
-		// Use TOML adapter for Codex
-		return as.tomlAdapter.SetMCPServersFromStandard(configPath, servers)
-	}
 
-	// Read the full config file first (JSON format)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return err
-	}
+		// Get config key from agent definition
+		targetKeyName := as.configLoader.GetConfigKey(agentID)
+		sourceFormat := as.configLoader.GetFormat(agentID)
 
-	// Remove comments if present
-	dataStr := string(data)
-	lines := strings.Split(dataStr, "\n")
-	var cleanedLines []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "//") {
-			cleanedLines = append(cleanedLines, line)
+		// Determine source key name from input
+		sourceKeyName := ""
+		if _, hasZedKey := mcpServersConfig["context_servers"]; hasZedKey {
+			sourceKeyName = "context_servers"
+		} else if _, hasStdKey := mcpServersConfig["mcpServers"]; hasStdKey {
+			sourceKeyName = "mcpServers"
 		}
-	}
-	cleanedData := []byte(strings.Join(cleanedLines, "\n"))
 
-	var fullConfig map[string]interface{}
-	if err := json.Unmarshal(cleanedData, &fullConfig); err != nil {
-		return err
-	}
+		// Get the servers data
+		var serversData interface{}
+		if sourceKeyName != "" {
+			serversData = mcpServersConfig[sourceKeyName]
+		}
 
-	// Get config key from agent definition
-	targetKeyName := as.configLoader.GetConfigKey(agentID)
-	sourceFormat := as.configLoader.GetFormat(agentID)
+		// Transform format if needed
+		if sourceKeyName != targetKeyName && sourceKeyName != "" {
+			// Need to convert between formats
+			if sourceKeyName == "context_servers" && targetKeyName == "mcpServers" {
+				serversData = convertZedToStandard(serversData)
+			} else if sourceKeyName == "mcpServers" && targetKeyName == "context_servers" {
+				serversData = convertStandardToZed(serversData)
+			}
+		}
 
-	// Determine source key name from input
-	sourceKeyName := ""
-	if _, hasZedKey := mcpServersConfig["context_servers"]; hasZedKey {
-		sourceKeyName = "context_servers"
-	} else if _, hasStdKey := mcpServersConfig["mcpServers"]; hasStdKey {
-		sourceKeyName = "mcpServers"
-	}
-
-	// Get the servers data
-	var serversData interface{}
-	if sourceKeyName != "" {
-		serversData = mcpServersConfig[sourceKeyName]
-	}
-
-	// Transform format if needed
-	if sourceKeyName != targetKeyName && sourceKeyName != "" {
-		// Need to convert between formats
-		if sourceKeyName == "context_servers" && targetKeyName == "mcpServers" {
-			serversData = convertZedToStandard(serversData)
-		} else if sourceKeyName == "mcpServers" && targetKeyName == "context_servers" {
+		// For Zed format, add required fields
+		if sourceFormat == "zed" && targetKeyName == "context_servers" {
 			serversData = convertStandardToZed(serversData)
 		}
+
+		// Apply Windows-specific transformation based on this specific path
+		// Windows paths: wrap npx with cmd /c
+		// WSL paths: UNWRAP cmd /c to get bare npx (source may already have cmd /c from Windows)
+		if as.windowsSvc.ShouldApplyWindowsTransformation(configPath) {
+			println(fmt.Sprintf("  [%s] 应用 Windows npx 命令转换 (wrap)", configPath))
+			if serversDataMap, ok := serversData.(map[string]interface{}); ok {
+				mcpServers := as.convertServersDataToMCPServers(serversDataMap)
+				mcpServers = as.windowsSvc.ApplyWindowsTransformation(mcpServers, true)
+				serversData = as.convertMCPServersToServersData(mcpServers)
+			}
+		} else if as.windowsSvc.IsWindows() && as.windowsSvc.IsWSLPath(configPath) {
+			println(fmt.Sprintf("  [%s] WSL环境，解包 Windows cmd /c 命令", configPath))
+			// WSL is Linux - UNWRAP any cmd /c wrappers from the source config
+			if serversDataMap, ok := serversData.(map[string]interface{}); ok {
+				mcpServers := as.convertServersDataToMCPServers(serversDataMap)
+				mcpServers = as.windowsSvc.ApplyWindowsTransformation(mcpServers, false) // false = unwrap
+				serversData = as.convertMCPServersToServersData(mcpServers)
+			}
+		}
+
+		// Update the config with target format
+		if serversData != nil {
+			fullConfig[targetKeyName] = serversData
+		}
+
+		// Write back the full config
+		updatedData, err := json.MarshalIndent(fullConfig, "", "  ")
+		if err != nil {
+			errorMessages = append(errorMessages, fmt.Sprintf("failed to marshal config for %s: %v", configPath, err))
+			continue
+		}
+
+		if err := os.WriteFile(configPath, updatedData, 0644); err != nil {
+			errorMessages = append(errorMessages, fmt.Sprintf("failed to write to %s: %v", configPath, err))
+			continue
+		}
+
+		println(fmt.Sprintf("Successfully saved config to: %s", configPath))
 	}
 
-	// For Zed format, add required fields
-	if sourceFormat == "zed" && targetKeyName == "context_servers" {
-		serversData = convertStandardToZed(serversData)
-	}
-
-	// Update the config with target format
-	if serversData != nil {
-		fullConfig[targetKeyName] = serversData
-	}
-
-	// Write back the full config
-	updatedData, err := json.MarshalIndent(fullConfig, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(configPath, updatedData, 0644); err != nil {
-		return err
+	if len(errorMessages) > 0 {
+		return fmt.Errorf("errors occurred while saving: %s", strings.Join(errorMessages, "; "))
 	}
 
 	return nil
@@ -813,28 +979,8 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 		sourceAgentID, sourceKey, sourceFormat,
 		targetAgentID, targetKey, targetFormat))
 
-	// Apply Windows-specific transformations if running on Windows
-	if as.windowsSvc.IsWindows() {
-		println("  检测到 Windows 系统，应用 npx 命令转换")
-
-		// Convert to MCPServer slice, apply transformation, and convert back
-		servers := as.convertServersDataToMCPServers(serversData)
-		println(fmt.Sprintf("  [转换前] %d 个服务器", len(servers)))
-		for _, s := range servers {
-			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
-		}
-
-		servers = as.windowsSvc.ApplyWindowsTransformation(servers, true)
-
-		println(fmt.Sprintf("  [转换后] %d 个服务器", len(servers)))
-		for _, s := range servers {
-			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
-		}
-
-		serversData = as.convertMCPServersToServersData(servers)
-
-		println("  Windows npx 命令转换完成")
-	}
+	// NOTE: Windows-specific npx wrapping is now handled per-path in SaveAgentMCPConfig
+	// This allows proper handling when an agent has both Windows and WSL config paths
 
 	// Normalize format names (codex_toml is already converted to standard by GetAgentMCPConfig)
 	normalizedSourceFormat := sourceFormat
@@ -1184,6 +1330,25 @@ func (as *AppService) DetectPullConflict() (*models.SyncConflict, error) {
 func (as *AppService) ResolveConflict(conflictType string, resolution string) error {
 	// resolution: "keep_local", "use_remote", "merge"
 
+	// Ensure gistSync is initialized before any operation
+	if as.gistSync == nil {
+		config, err := as.storage.LoadSyncConfig()
+		if err != nil {
+			return fmt.Errorf("failed to load sync config: %w", err)
+		}
+		if config.GitHubToken == "" || config.GistID == "" {
+			return fmt.Errorf("GitHub token or Gist ID not configured")
+		}
+		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
+		}
+	}
+
 	switch resolution {
 	case "keep_local":
 		// Just push local to remote
@@ -1238,6 +1403,8 @@ func (as *AppService) mergeAndApplyConfigs(remoteConfigs map[string]interface{})
 		baseConfigs = make(map[string]interface{})
 	}
 
+	// Track which remote agents are processed
+	processedAgentIDs := make(map[string]bool)
 	mergedCount := 0
 
 	for _, agent := range localAgents {
@@ -1245,6 +1412,7 @@ func (as *AppService) mergeAndApplyConfigs(remoteConfigs map[string]interface{})
 			continue
 		}
 
+		processedAgentIDs[agent.ID] = true
 		keyName := as.configLoader.GetConfigKey(agent.ID)
 
 		// 1. Get Local Config
@@ -1298,7 +1466,21 @@ func (as *AppService) mergeAndApplyConfigs(remoteConfigs map[string]interface{})
 		mergedCount++
 	}
 
-	println(fmt.Sprintf("Successfully merged configurations for %d agents", mergedCount))
+	// Log remote-only agents that will be preserved during push
+	// These are agents configured on other devices but not installed locally
+	remoteOnlyCount := 0
+	for agentID := range remoteConfigs {
+		if !processedAgentIDs[agentID] {
+			remoteOnlyCount++
+			println(fmt.Sprintf("Remote-only agent (not installed locally, will be preserved): %s", agentID))
+		}
+	}
+
+	if remoteOnlyCount > 0 {
+		println(fmt.Sprintf("Note: %d remote agent(s) not installed locally - their configs will be preserved during push", remoteOnlyCount))
+	}
+
+	println(fmt.Sprintf("Successfully merged configurations for %d local agents", mergedCount))
 	return nil
 }
 
@@ -1550,11 +1732,16 @@ func (as *AppService) GetConflictDetails() (*models.ConflictDetails, error) {
 		Agents: make(map[string]models.AgentDiff),
 	}
 
-	// 3. Compare Items
+	// Track which remote agents have been processed
+	processedRemoteAgents := make(map[string]bool)
+
+	// 3. Compare Items for locally detected agents
 	for _, agent := range localAgents {
 		if agent.Status != "detected" {
 			continue
 		}
+
+		processedRemoteAgents[agent.ID] = true
 
 		// Get Local Servers
 		localConfigWrap, err := as.GetAgentMCPConfig(agent.ID)
@@ -1580,6 +1767,41 @@ func (as *AppService) GetConflictDetails() (*models.ConflictDetails, error) {
 		// Compare to generate Diff
 		diff := as.generateAgentDiff(agent.ID, localServers, remoteServers)
 		details.Agents[agent.ID] = diff
+	}
+
+	// 4. CRITICAL: Also show agents that exist only in remote (not installed locally)
+	// This ensures users see all remote configurations and know they won't be lost
+	for agentID, remoteConfig := range remoteConfigs {
+		if processedRemoteAgents[agentID] {
+			continue // Already processed above
+		}
+
+		// This agent exists in remote but not installed locally
+		// Show all its servers as "RemoteOnly" with a special note
+		var remoteServers []models.MCPServer
+		if remoteConfigMap, ok := remoteConfig.(map[string]interface{}); ok {
+			// Try common config keys since we don't know the agent definition
+			for _, keyName := range []string{"mcpServers", "context_servers", "mcp_servers"} {
+				if remoteData, ok := remoteConfigMap[keyName]; ok {
+					remoteServers = as.convertServersDataToMCPServers(remoteData)
+					if len(remoteServers) > 0 {
+						break
+					}
+				}
+			}
+		}
+
+		if len(remoteServers) > 0 {
+			diff := models.AgentDiff{
+				AgentID:      agentID,
+				LocalOnly:    []models.MCPServer{}, // No local servers (not installed)
+				RemoteOnly:   remoteServers,        // All remote servers
+				Conflicts:    []models.ServerConflict{},
+				NotInstalled: true, // Mark as not installed locally
+			}
+			details.Agents[agentID] = diff
+			println(fmt.Sprintf("Remote-only agent in conflict details: %s (not installed locally, %d servers)", agentID, len(remoteServers)))
+		}
 	}
 
 	return details, nil

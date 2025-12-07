@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/Card"
 import { Button } from "./ui/Button"
-import { Cloud, RefreshCw, Check, AlertCircle } from "lucide-react"
+import { RefreshCw, Check, AlertCircle } from "lucide-react"
 import { useI18n } from "../i18n/useI18n"
 import { ConflictDetails } from "../types/models"
 import { ConflictResolver } from "./ConflictResolver"
@@ -45,18 +45,63 @@ export function Dashboard() {
 
   const loadSyncStatus = async () => {
     try {
-      if ((window as any).go?.main?.App?.GetSyncConfig) {
-        const config = await (window as any).go.main.App.GetSyncConfig()
-        if (config && config.last_sync_time) {
-          const lastSyncDate = new Date(config.last_sync_time)
+      // Use GetSyncReadyStatus for complete configuration check (including encryption)
+      if ((window as any).go?.main?.App?.GetSyncReadyStatus) {
+        const readyStatus = await (window as any).go.main.App.GetSyncReadyStatus()
+
+        if (readyStatus.ready) {
+          // Fully configured and ready - get last sync time from config
+          const config = await (window as any).go.main.App.GetSyncConfig()
+          const lastSyncDate = config?.last_sync_time ? new Date(config.last_sync_time) : null
           setSyncStatus({
-            lastSyncTime: lastSyncDate.toLocaleString(),
-            status: config.last_sync_status === "success" ? "success" : "pending",
+            lastSyncTime: lastSyncDate ? lastSyncDate.toLocaleString() : "Never",
+            status: "success",
+          })
+        } else if (readyStatus.has_token || readyStatus.has_gist_id) {
+          // Partially configured - show warning with missing items
+          setSyncStatus({
+            lastSyncTime: "Never",
+            status: "failed", // Use failed to show warning color
+            message: readyStatus.message || "Configuration incomplete",
+          })
+        } else {
+          // Not configured at all
+          setSyncStatus({
+            lastSyncTime: "Never",
+            status: "pending",
+          })
+        }
+      } else if ((window as any).go?.main?.App?.GetSyncConfig) {
+        // Fallback to old behavior if new API not available
+        const config = await (window as any).go.main.App.GetSyncConfig()
+        const isConfigured = config && config.github_token && config.gist_id && config.enable_encryption
+
+        if (isConfigured) {
+          const lastSyncDate = config.last_sync_time ? new Date(config.last_sync_time) : null
+          setSyncStatus({
+            lastSyncTime: lastSyncDate ? lastSyncDate.toLocaleString() : "Never",
+            status: "success",
+          })
+        } else if (config && (config.github_token || config.gist_id)) {
+          // Partially configured
+          setSyncStatus({
+            lastSyncTime: "Never",
+            status: "failed",
+            message: "Encryption not configured - go to Settings to complete setup",
+          })
+        } else {
+          setSyncStatus({
+            lastSyncTime: "Never",
+            status: "pending",
           })
         }
       }
     } catch (error) {
       console.error("Failed to load sync status:", error)
+      setSyncStatus({
+        lastSyncTime: "Never",
+        status: "pending",
+      })
     }
   }
 
@@ -94,50 +139,18 @@ export function Dashboard() {
     }
   }
 
-  const handlePush = async () => {
-    setIsLoading(true)
-    try {
-      // Check for push conflict first
-      const conflict = await (window as any).go.main.App.DetectPushConflict()
-      if (conflict && conflict.has_conflict) {
-        // Fetch detailed conflict info
-        const details = await (window as any).go.main.App.GetConflictDetails()
-        setConflictDetails(details)
-        setShowConflictResolver(true)
-        setIsLoading(false)
-        return
-      }
-
-      await (window as any).go.main.App.PushAllAgentsToGist()
-
-      setSyncStatus({
-        lastSyncTime: new Date().toLocaleString(),
-        status: "success",
-        message: "Successfully pushed all MCP configurations to Gist",
-      })
-      setTimeout(() => {
-        setSyncStatus(prev => ({ ...prev, message: undefined }))
-        loadSyncStatus()
-      }, 3000)
-    } catch (error) {
-      console.error("Push error:", error)
-      setSyncStatus({
-        lastSyncTime: new Date().toLocaleString(),
-        status: "failed",
-        message: `Push failed: ${String(error)}`,
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
+  // Smart Sync: Check for conflicts, if any show resolver, otherwise merge
   const handleSync = async () => {
     setIsLoading(true)
     try {
-      // Check for pull conflict
-      const conflict = await (window as any).go.main.App.DetectPullConflict()
-      if (conflict && conflict.has_conflict) {
-        // Fetch detailed conflict info
+      // Check for any conflicts (both push and pull)
+      const pushConflict = await (window as any).go.main.App.DetectPushConflict()
+      const pullConflict = await (window as any).go.main.App.DetectPullConflict()
+
+      const hasConflict = (pushConflict && pushConflict.has_conflict) || (pullConflict && pullConflict.has_conflict)
+
+      if (hasConflict) {
+        // Fetch detailed conflict info and show resolver
         const details = await (window as any).go.main.App.GetConflictDetails()
         setConflictDetails(details)
         setShowConflictResolver(true)
@@ -145,14 +158,17 @@ export function Dashboard() {
         return
       }
 
-      // No conflict -> Standard Pull (use remote only, do not push back)
-      await (window as any).go.main.App.ResolveConflict("", "use_remote")
+      // No conflict -> Perform merge (sync both ways)
+      await (window as any).go.main.App.ResolveConflict("", "merge")
 
       setSyncStatus({
         lastSyncTime: new Date().toLocaleString(),
         status: "success",
-        message: "Successfully pulled updates from Cloud",
+        message: t("dashboard.sync_success") || "Synced successfully",
       })
+
+      // Reload stats
+      loadAgentStats()
 
       setTimeout(() => {
         setSyncStatus(prev => ({ ...prev, message: undefined }))
@@ -210,7 +226,7 @@ export function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Cloud className="w-5 h-5" />
+              <RefreshCw className="w-5 h-5" />
               {t("dashboard.sync_status")}
             </CardTitle>
             <CardDescription>{t("dashboard.last_sync")}: {syncStatus.lastSyncTime}</CardDescription>
@@ -225,37 +241,40 @@ export function Dashboard() {
                   </div>
                 )}
                 {syncStatus.status === "failed" && (
-                  <div className="flex items-center gap-2 text-red-600">
+                  <div className="flex items-center gap-2 text-yellow-600">
                     <AlertCircle className="w-5 h-5" />
-                    <span>Failed</span>
+                    <span>{t("dashboard.settings_status_not_configured") || "Setup Required"}</span>
                   </div>
                 )}
                 {syncStatus.status === "pending" && (
                   <span className="text-muted-foreground">Not configured</span>
                 )}
               </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={handlePush}
-                  disabled={isLoading}
-                  className="gap-2"
-                  variant="outline"
-                >
-                  <Cloud className="w-4 h-4" />
-                  Push
-                </Button>
-                <Button
-                  onClick={handleSync}
-                  disabled={isLoading}
-                  className="gap-2"
-                >
-                  <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                  Pull / Sync
-                </Button>
-              </div>
+              <Button
+                onClick={handleSync}
+                disabled={isLoading || syncStatus.status !== "success"}
+                className="gap-2"
+                title={syncStatus.status !== "success" ? "Complete sync configuration in Settings first" : ""}
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                {t("common.sync") || "Sync"}
+              </Button>
             </div>
             {syncStatus.message && (
-              <p className="text-sm text-muted-foreground">{syncStatus.message}</p>
+              <div className={`text-sm p-2 rounded ${syncStatus.status === "failed"
+                  ? "bg-yellow-50 text-yellow-800 border border-yellow-200"
+                  : "text-muted-foreground"
+                }`}>
+                {syncStatus.message}
+                {syncStatus.status === "failed" && (
+                  <span
+                    className="ml-2 underline cursor-pointer hover:text-yellow-900"
+                    onClick={() => window.location.hash = '#settings'}
+                  >
+                    Go to Settings →
+                  </span>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

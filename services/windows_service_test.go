@@ -435,3 +435,96 @@ func TestWindowsService_ShouldWrapForWindows(t *testing.T) {
 		})
 	}
 }
+
+func TestWindowsService_IsWSLPath(t *testing.T) {
+	ws := NewWindowsService()
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{
+			name: "WSL localhost path",
+			path: "\\\\wsl.localhost\\Ubuntu\\home\\user\\.config\\cursor\\mcp.json",
+			want: true,
+		},
+		{
+			name: "WSL localhost path lowercase",
+			path: "\\\\wsl.localhost\\ubuntu\\home\\user\\.config\\cursor\\mcp.json",
+			want: true,
+		},
+		{
+			name: "WSL$ path",
+			path: "\\\\wsl$\\Ubuntu\\home\\user\\.config\\cursor\\mcp.json",
+			want: true,
+		},
+		{
+			name: "WSL$ path lowercase",
+			path: "\\\\wsl$\\ubuntu\\home\\user\\.cursor\\mcp.json",
+			want: true,
+		},
+		{
+			name: "Windows path with drive letter",
+			path: "C:\\Users\\user\\.cursor\\mcp.json",
+			want: false,
+		},
+		{
+			name: "Windows path APPDATA",
+			path: "C:\\Users\\user\\AppData\\Roaming\\Code\\User\\settings.json",
+			want: false,
+		},
+		{
+			name: "Windows path with tilde expanded",
+			path: "C:\\Users\\user\\.claude.json",
+			want: false,
+		},
+		{
+			name: "Empty path",
+			path: "",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ws.IsWSLPath(tt.path); got != tt.want {
+				t.Errorf("IsWSLPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWindowsService_ShouldApplyWindowsTransformation(t *testing.T) {
+	ws := NewWindowsService()
+
+	tests := []struct {
+		name       string
+		configPath string
+		want       bool
+	}{
+		{
+			name:       "Windows path should apply transformation",
+			configPath: "C:\\Users\\user\\.cursor\\mcp.json",
+			want:       runtime.GOOS == "windows", // true on Windows only
+		},
+		{
+			name:       "WSL path should NOT apply transformation",
+			configPath: "\\\\wsl.localhost\\Ubuntu\\home\\user\\.cursor\\mcp.json",
+			want:       false, // never apply Windows transformation to WSL paths
+		},
+		{
+			name:       "WSL$ path should NOT apply transformation",
+			configPath: "\\\\wsl$\\Ubuntu\\home\\user\\.cursor\\mcp.json",
+			want:       false, // never apply Windows transformation to WSL paths
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ws.ShouldApplyWindowsTransformation(tt.configPath); got != tt.want {
+				t.Errorf("ShouldApplyWindowsTransformation(%q) = %v, want %v", tt.configPath, got, tt.want)
+			}
+		})
+	}
+}

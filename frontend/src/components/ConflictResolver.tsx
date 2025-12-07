@@ -63,7 +63,22 @@ export function ConflictResolver({ details, onResolve, onCancel }: ConflictResol
                                 <h3 className="text-lg font-semibold flex items-center gap-2">
                                     <span className="w-2 h-8 bg-primary rounded-full" />
                                     Agent: {agent.agent_id}
+                                    {agent.not_installed && (
+                                        <span className="text-xs font-normal px-2 py-1 bg-orange-100 text-orange-700 rounded-full">
+                                            Not installed locally
+                                        </span>
+                                    )}
                                 </h3>
+
+                                {/* Special message for not_installed agents */}
+                                {agent.not_installed && (
+                                    <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg border border-orange-200 dark:border-orange-800">
+                                        <p className="text-sm text-orange-800 dark:text-orange-200">
+                                            <strong>Note:</strong> This tool is configured on another device but not installed here.
+                                            Its configuration will be preserved in the cloud and won't affect your local system.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {/* Conflict List */}
                                 <div className="space-y-4">
@@ -99,7 +114,9 @@ export function ConflictResolver({ details, onResolve, onCancel }: ConflictResol
                                         <div className="bg-secondary/30 p-4 rounded-lg border border-border/50">
                                             <h4 className="text-sm font-medium mb-2 flex items-center gap-2 text-blue-600">
                                                 <Check className="w-4 h-4" />
-                                                New Cloud Items (Will be added to Local)
+                                                {agent.not_installed
+                                                    ? "Cloud Items (Will be preserved, not applied locally)"
+                                                    : "New Cloud Items (Will be added to Local)"}
                                             </h4>
                                             <div className="flex flex-wrap gap-2">
                                                 {(agent.remote_only ?? []).map(s => (

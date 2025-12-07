@@ -87,6 +87,42 @@ func (s *StorageService) IsEncryptionEnabled() bool {
 	return s.oldEnabled
 }
 
+// ResetEncryptedConfig backs up and removes encrypted config files when decryption fails
+// This allows users to reconfigure from scratch
+func (s *StorageService) ResetEncryptedConfig() error {
+	configPath := filepath.Join(s.dataDir, "sync_config.json")
+
+	if !fileExists(configPath) {
+		return nil // Nothing to reset
+	}
+
+	// Check if the file is encrypted
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	if !s.isEncrypted(data) {
+		return nil // File is not encrypted, no need to reset
+	}
+
+	// Create backup
+	backupPath := configPath + ".encrypted.backup"
+	if err := ioutil.WriteFile(backupPath, data, 0644); err != nil {
+		fmt.Printf("[Reset] Warning: could not create backup: %v\n", err)
+	} else {
+		fmt.Printf("[Reset] Encrypted config backed up to: %s\n", backupPath)
+	}
+
+	// Remove the encrypted file
+	if err := os.Remove(configPath); err != nil {
+		return fmt.Errorf("failed to remove encrypted config: %w", err)
+	}
+
+	fmt.Printf("[Reset] Encrypted config removed. You will need to reconfigure GitHub Gist sync.\n")
+	return nil
+}
+
 // isEncrypted checks if a file is already encrypted (starts with ENC: marker)
 func (s *StorageService) isEncrypted(data []byte) bool {
 	return strings.HasPrefix(string(data), "ENC:")
@@ -127,27 +163,46 @@ func (s *StorageService) encryptIfNeededOld(data []byte) ([]byte, error) {
 
 // decryptIfNeeded decrypts data if it's encrypted
 func (s *StorageService) decryptIfNeeded(data []byte) ([]byte, error) {
-	// 首先尝试使用新的安全加密系统
-	if s.crypto != nil && s.crypto.IsEnabled() {
-		result, err := s.crypto.DecryptIfNeeded(data)
-		if err == nil {
-			return result, nil
-		}
-		// 如果新系统解密失败，可能是旧版本的数据，继续尝试旧系统
-	}
-
-	// 兼容旧的加密系统
-	if s.securityMgr != nil && s.oldEnabled {
-		return s.decryptIfNeededOld(data)
-	}
-
 	// 如果数据未加密，直接返回
 	if !s.isEncrypted(data) {
 		return data, nil
 	}
 
-	// 如果数据已加密但没有可用的解密系统
-	return nil, fmt.Errorf("file is encrypted but no decryption key available")
+	// 尝试解密加密数据
+	var lastErr error
+
+	// 首先尝试使用新的安全加密系统 (Windows DPAPI)
+	if s.crypto != nil && s.crypto.IsEnabled() {
+		result, err := s.crypto.DecryptIfNeeded(data)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		fmt.Printf("[Decrypt] SecureCrypto failed: %v, trying legacy system...\n", err)
+	}
+
+	// 兼容旧的加密系统
+	if s.securityMgr != nil && s.oldEnabled {
+		result, err := s.decryptIfNeededOld(data)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		fmt.Printf("[Decrypt] Legacy SecurityManager failed: %v\n", err)
+	}
+
+	// 如果所有解密尝试都失败，返回详细错误
+	errMsg := "file is encrypted but decryption failed"
+	if lastErr != nil {
+		errMsg = fmt.Sprintf("decryption failed: %v. This may happen if the encryption key was regenerated or the config was encrypted on a different machine", lastErr)
+	}
+
+	// 提示用户可能需要重新配置
+	fmt.Printf("[Decrypt] WARNING: %s\n", errMsg)
+	fmt.Printf("[Decrypt] If you see this message repeatedly, you may need to delete the encrypted config file and reconfigure.\n")
+	fmt.Printf("[Decrypt] Config location: %s\n", s.dataDir)
+
+	return nil, fmt.Errorf("%s", errMsg)
 }
 
 // decryptIfNeededOld 兼容旧的解密方法
