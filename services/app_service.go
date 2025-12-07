@@ -51,6 +51,10 @@ func NewAppService() (*AppService, error) {
 	// 创建安全管理器（使用 gist ID 作为加密密钥的一部分）
 	securityMgr := NewSecurityManager(homeDir)
 
+	// Inject legacy security manager into storage to handle migration
+	storage.securityMgr = securityMgr
+	storage.oldEnabled = true
+
 	converter := NewConfigConverter(configLoader)
 	tomlAdapter := NewTOMLAdapter()
 
@@ -71,7 +75,22 @@ func (as *AppService) DetectAgents() ([]models.Agent, error) {
 }
 
 func (as *AppService) InitializeGistSync(token, gistID string) (string, error) {
-	// If no gistID provided, create a new gist
+	// If gistID provided, validate it exists
+	if gistID != "" {
+		tempGs := NewGistSyncService(token, gistID)
+		_, err := tempGs.GetLatestVersion()
+		if err != nil {
+			if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+				println(fmt.Sprintf("Warning: Provided Gist ID %s not found (404). Will create a new one.", gistID))
+				gistID = ""
+			} else {
+				// Other error (e.g. auth failed), return it
+				return "", fmt.Errorf("failed to validate gist: %w", err)
+			}
+		}
+	}
+
+	// If no gistID provided (or invalid/not found), create a new gist
 	if gistID == "" {
 		gs := NewGistSyncService(token, "")
 		var err error
@@ -137,6 +156,53 @@ func (as *AppService) SetupGistEncryption(enabled bool, password string) error {
 func (as *AppService) ValidateGitHubToken(token string) error {
 	gs := NewGistSyncService(token, "")
 	return gs.ValidateToken()
+}
+
+// GetGistStatus checks the current status of the Gist connection
+// returns: "valid", "invalid_token", "gist_not_found", "error"
+func (as *AppService) GetGistStatus() (string, error) {
+	config, err := as.storage.LoadSyncConfig()
+	if err != nil {
+		return "error", err
+	}
+
+	if config.GitHubToken == "" {
+		return "unconfigured", nil
+	}
+
+	gs := NewGistSyncService(config.GitHubToken, config.GistID)
+
+	// Setup encryption if enabled (required to validate encrypted Gist content)
+	if config.EnableEncryption {
+		password := config.GistEncryptionPassword
+		// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+		if password == "" && config.EncryptionPassword != "" {
+			password = config.EncryptionPassword
+		}
+		gs.SetEncryption(config.EnableEncryption, password)
+	}
+
+	// 1. Validate Token
+	if err := gs.ValidateToken(); err != nil {
+		return "invalid_token", err
+	}
+
+	if config.GistID == "" {
+		return "no_gist", nil
+	}
+
+	// 2. Validate Gist ID Existence
+	_, err = gs.GetLatestVersion()
+	if err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return "gist_not_found", fmt.Errorf("gist not found")
+		}
+		// If it's just empty or other non-404 error, we might consider it valid or error
+		// treating other errors as generic errors
+		return "error", err
+	}
+
+	return "valid", nil
 }
 
 // PushAllAgentsToGist 推送所有已安装 agents 的完整配置到 Gist（保留完整的原始配置）
@@ -429,12 +495,39 @@ func (as *AppService) GetSyncConfig() (models.SyncConfig, error) {
 	return as.storage.LoadSyncConfig()
 }
 
+// SaveSyncConfig saves the sync configuration
 func (as *AppService) SaveSyncConfig(config models.SyncConfig) error {
-	return as.storage.SaveSyncConfig(config)
-}
+	// Auto-detect existing Gist if ID is missing but token is provided
+	if config.GistID == "" && config.GitHubToken != "" {
+		tempGistSync := NewGistSyncService(config.GitHubToken, "")
+		existingID, err := tempGistSync.FindExistingGist()
+		if err == nil && existingID != "" {
+			config.GistID = existingID
+			println(fmt.Sprintf("Auto-detected existing Gist ID: %s", existingID))
+		}
+	}
 
-func (as *AppService) GetConfigVersions(limit int) ([]models.ConfigVersion, error) {
-	return as.storage.ListConfigVersions(limit)
+	// Update gitignore if token is present
+	if config.GitHubToken != "" {
+		if err := as.updateGitignore(); err != nil {
+			fmt.Printf("Warning: failed to update .gitignore: %v\n", err)
+		}
+	}
+
+	// Initialize gist sync service if configured
+	if config.GitHubToken != "" && config.GistID != "" {
+		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
+		}
+	}
+
+	return as.storage.SaveSyncConfig(config)
 }
 
 func (as *AppService) GetSyncLogs(limit int) ([]models.SyncLog, error) {
@@ -667,7 +760,7 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 	if err != nil {
 		return fmt.Errorf("failed to read source agent config: %w", err)
 	}
-	
+
 	// Debug: show initial read data
 	sourceKeyDebug := as.configLoader.GetConfigKey(sourceAgentID)
 	if serversData, ok := sourceConfig[sourceKeyDebug]; ok {
@@ -730,14 +823,14 @@ func (as *AppService) SyncConfigBetweenAgents(sourceAgentID, targetAgentID strin
 		for _, s := range servers {
 			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
 		}
-		
+
 		servers = as.windowsSvc.ApplyWindowsTransformation(servers, true)
-		
+
 		println(fmt.Sprintf("  [转换后] %d 个服务器", len(servers)))
 		for _, s := range servers {
 			println(fmt.Sprintf("    %s: command=%s, args=%d, env=%d", s.Name, s.Command, len(s.Args), len(s.Env)))
 		}
-		
+
 		serversData = as.convertMCPServersToServersData(servers)
 
 		println("  Windows npx 命令转换完成")
@@ -796,7 +889,7 @@ func (as *AppService) convertServersDataToMCPServers(serversData interface{}) []
 				if cmd, ok := serverMap["command"].(string); ok {
 					server.Command = cmd
 				}
-				
+
 				// Handle args - support both []interface{} and []string
 				if argsInterface, ok := serverMap["args"]; ok {
 					switch args := argsInterface.(type) {
@@ -810,7 +903,7 @@ func (as *AppService) convertServersDataToMCPServers(serversData interface{}) []
 						server.Args = args
 					}
 				}
-				
+
 				// Handle env - support both map[string]interface{} and map[string]string
 				if envInterface, ok := serverMap["env"]; ok {
 					switch env := envInterface.(type) {
@@ -974,12 +1067,32 @@ func (as *AppService) DetectPushConflict() (*models.SyncConflict, error) {
 	// Get remote version from Gist
 	remoteVersion, err := as.gistSync.GetLatestVersion()
 	if err != nil {
-		// If Gist is empty, no conflict
-		return &models.SyncConflict{HasConflict: false}, nil
+		// If Gist is not found (404), no conflict, treat as fresh push
+		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return &models.SyncConflict{HasConflict: false}, nil
+		}
+		// If other error, return it
+		return nil, err
 	}
 
 	// Compare hashes
 	if remoteVersion != nil && localVersion.Hash != remoteVersion.Hash {
+		// Double check with deep comparison to avoid false positives due to formatting
+		details, err := as.GetConflictDetails()
+		if err == nil && details != nil {
+			hasRealDiff := false
+			for _, diff := range details.Agents {
+				if len(diff.LocalOnly) > 0 || len(diff.RemoteOnly) > 0 || len(diff.Conflicts) > 0 {
+					hasRealDiff = true
+					break
+				}
+			}
+			if !hasRealDiff {
+				// Hashes differ but content is effectively the same
+				return &models.SyncConflict{HasConflict: false}, nil
+			}
+		}
+
 		return &models.SyncConflict{
 			HasConflict:   true,
 			ConflictType:  "push_conflict",
@@ -1023,9 +1136,13 @@ func (as *AppService) DetectPullConflict() (*models.SyncConflict, error) {
 		return nil, fmt.Errorf("failed to get local version: %w", err)
 	}
 
-	// Get remote version
+	// Get remote version from Gist
 	remoteVersion, err := as.gistSync.GetLatestVersion()
 	if err != nil {
+		// If Gist is not found (404), there is no remote version to conflict with
+		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return &models.SyncConflict{HasConflict: false}, nil
+		}
 		return nil, fmt.Errorf("failed to get remote version: %w", err)
 	}
 
@@ -1035,6 +1152,22 @@ func (as *AppService) DetectPullConflict() (*models.SyncConflict, error) {
 
 	// Compare hashes - if local is newer than remote, there's unsaved local changes
 	if localVersion != nil && localVersion.Timestamp.After(remoteVersion.Timestamp) && localVersion.Hash != remoteVersion.Hash {
+		// Double check with deep comparison to avoid false positives due to formatting
+		details, err := as.GetConflictDetails()
+		if err == nil && details != nil {
+			hasRealDiff := false
+			for _, diff := range details.Agents {
+				if len(diff.LocalOnly) > 0 || len(diff.RemoteOnly) > 0 || len(diff.Conflicts) > 0 {
+					hasRealDiff = true
+					break
+				}
+			}
+			if !hasRealDiff {
+				// Hashes differ but content is effectively the same
+				return &models.SyncConflict{HasConflict: false}, nil
+			}
+		}
+
 		return &models.SyncConflict{
 			HasConflict:   true,
 			ConflictType:  "pull_conflict",
@@ -1062,12 +1195,628 @@ func (as *AppService) ResolveConflict(conflictType string, resolution string) er
 		return err
 
 	case "merge":
-		// TODO: Implement smart merge logic
-		// For now, just use remote
-		_, err := as.PullFromGist()
-		return err
+		// 1. Pull remote configs
+		remoteConfigs, err := as.gistSync.PullAgentConfigsFromGist()
+		if err != nil {
+			// If Gist is not found (404), treat as empty remote config instead of error
+			if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+				remoteConfigs = make(map[string]interface{})
+			} else {
+				return fmt.Errorf("failed to pull remote configs for merge: %w", err)
+			}
+		}
+
+		// 2. Perform merge
+		if err := as.mergeAndApplyConfigs(remoteConfigs); err != nil {
+			return fmt.Errorf("failed to merge configs: %w", err)
+		}
+
+		// 3. Push merged result back to remote to sync state
+		if err := as.PushAllAgentsToGist(); err != nil {
+			return fmt.Errorf("merged successfully locally but failed to push to gist: %w", err)
+		}
+
+		return nil
 
 	default:
 		return fmt.Errorf("unknown resolution type: %s", resolution)
 	}
+}
+
+// mergeAndApplyConfigs performs the smart merge logic
+func (as *AppService) mergeAndApplyConfigs(remoteConfigs map[string]interface{}) error {
+	// Detect local agents
+	localAgents, err := as.detector.DetectInstalledAgents()
+	if err != nil {
+		return err
+	}
+
+	// Try to find a base configuration (last synced version) for 3-way merge
+	baseConfigs, err := as.findBaseConfig()
+	if err != nil {
+		println(fmt.Sprintf("Warning: failed to load base config, falling back to 2-way merge: %v", err))
+		baseConfigs = make(map[string]interface{})
+	}
+
+	mergedCount := 0
+
+	for _, agent := range localAgents {
+		if agent.Status != "detected" {
+			continue
+		}
+
+		keyName := as.configLoader.GetConfigKey(agent.ID)
+
+		// 1. Get Local Config
+		localConfigWrap, err := as.GetAgentMCPConfig(agent.ID)
+		if err != nil {
+			println(fmt.Sprintf("Warning: skipping merge for agent %s (read local failed): %v", agent.ID, err))
+			continue
+		}
+
+		var localServers []models.MCPServer
+		if localServersData, ok := localConfigWrap[keyName]; ok {
+			localServers = as.convertServersDataToMCPServers(localServersData)
+		} else {
+			localServers = []models.MCPServer{}
+		}
+
+		// 2. Get Remote Config
+		var remoteServers []models.MCPServer
+		if remoteConfig, ok := remoteConfigs[agent.ID]; ok {
+			if remoteConfigMap, ok := remoteConfig.(map[string]interface{}); ok {
+				if remoteServersData, ok := remoteConfigMap[keyName]; ok {
+					remoteServers = as.convertServersDataToMCPServers(remoteServersData)
+				}
+			}
+		}
+
+		// 3. Get Base Config
+		var baseServers []models.MCPServer
+		if baseConfig, ok := baseConfigs[agent.ID]; ok {
+			if baseConfigMap, ok := baseConfig.(map[string]interface{}); ok {
+				if baseServersData, ok := baseConfigMap[keyName]; ok {
+					baseServers = as.convertServersDataToMCPServers(baseServersData)
+				}
+			}
+		}
+
+		// 4. Merge Logic (3-way)
+		mergedServers := as.mergeServerLists(localServers, remoteServers, baseServers)
+
+		// 5. Convert back and Save
+		mergedServersData := as.convertMCPServersToServersData(mergedServers)
+
+		newConfigWrap := map[string]interface{}{
+			keyName: mergedServersData,
+		}
+
+		if err := as.SaveAgentMCPConfig(agent.ID, newConfigWrap); err != nil {
+			return fmt.Errorf("failed to save merged config for agent %s: %w", agent.ID, err)
+		}
+
+		mergedCount++
+	}
+
+	println(fmt.Sprintf("Successfully merged configurations for %d agents", mergedCount))
+	return nil
+}
+
+// findBaseConfig attempts to find the last known consistent configuration
+func (as *AppService) findBaseConfig() (map[string]interface{}, error) {
+	// Look for the latest version with source="gist"
+	versions, err := as.storage.ListConfigVersions(10)
+	if err != nil {
+		return nil, err
+	}
+
+	var baseVersion *models.ConfigVersion
+	for _, v := range versions {
+		if v.Source == "gist" {
+			baseVersion = &v
+			break
+		}
+	}
+
+	if baseVersion == nil {
+		return nil, fmt.Errorf("no base version found")
+	}
+
+	// Parse the content
+	var configs map[string]interface{}
+	if err := json.Unmarshal([]byte(baseVersion.Content), &configs); err != nil {
+		return nil, fmt.Errorf("failed to parse base version: %w", err)
+	}
+
+	return configs, nil
+}
+
+// mergeServerLists implements a 3-way merge strategy
+func (as *AppService) mergeServerLists(local, remote, base []models.MCPServer) []models.MCPServer {
+	localMap := toServerMap(local)
+	remoteMap := toServerMap(remote)
+	baseMap := toServerMap(base)
+
+	mergedMap := make(map[string]models.MCPServer)
+
+	// Collect all IDs
+	allIDs := make(map[string]bool)
+	for id := range localMap {
+		allIDs[id] = true
+	}
+	for id := range remoteMap {
+		allIDs[id] = true
+	}
+	for id := range baseMap {
+		allIDs[id] = true
+	}
+
+	for id := range allIDs {
+		l, hasLocal := localMap[id]
+		r, hasRemote := remoteMap[id]
+		b, hasBase := baseMap[id]
+
+		if hasLocal && hasRemote {
+			if !hasBase {
+				mergedMap[id] = mergeTwoServers(l, r)
+			} else {
+				mergedMap[id] = mergeThreeWay(l, r, b)
+			}
+		} else if hasLocal && !hasRemote {
+			if hasBase {
+				if !isDeepEqual(l, b) {
+					mergedMap[id] = l
+				}
+			} else {
+				mergedMap[id] = l
+			}
+		} else if !hasLocal && hasRemote {
+			if hasBase {
+				if !isDeepEqual(r, b) {
+					mergedMap[id] = r
+				}
+			} else {
+				mergedMap[id] = r
+			}
+		}
+	}
+
+	result := make([]models.MCPServer, 0, len(mergedMap))
+	for _, s := range mergedMap {
+		result = append(result, s)
+	}
+	return result
+}
+
+func toServerMap(servers []models.MCPServer) map[string]models.MCPServer {
+	m := make(map[string]models.MCPServer)
+	for _, s := range servers {
+		m[s.ID] = s
+	}
+	return m
+}
+
+func mergeTwoServers(local, remote models.MCPServer) models.MCPServer {
+	merged := local
+	merged.Env = mergeEnv(local.Env, remote.Env)
+	if merged.Description == "" {
+		merged.Description = remote.Description
+	}
+	return merged
+}
+
+func mergeThreeWay(local, remote, base models.MCPServer) models.MCPServer {
+	merged := local
+
+	if local.Command == base.Command && remote.Command != base.Command {
+		merged.Command = remote.Command
+	}
+
+	argsLocalChanged := !areStringSlicesEqual(local.Args, base.Args)
+	argsRemoteChanged := !areStringSlicesEqual(remote.Args, base.Args)
+	if !argsLocalChanged && argsRemoteChanged {
+		merged.Args = remote.Args
+	}
+
+	finalEnv := make(map[string]string)
+	allKeys := make(map[string]bool)
+	for k := range base.Env {
+		allKeys[k] = true
+	}
+	for k := range local.Env {
+		allKeys[k] = true
+	}
+	for k := range remote.Env {
+		allKeys[k] = true
+	}
+
+	for k := range allKeys {
+		vBase, inBase := base.Env[k]
+		vLocal, inLocal := local.Env[k]
+		vRemote, inRemote := remote.Env[k]
+
+		if inLocal && inRemote {
+			if vLocal == vRemote {
+				finalEnv[k] = vLocal
+			} else {
+				if inBase && vLocal == vBase && vRemote != vBase {
+					finalEnv[k] = vRemote
+				} else {
+					finalEnv[k] = vLocal
+				}
+			}
+		} else if inLocal && !inRemote {
+			if inBase && vLocal == vBase {
+				// deleted
+			} else {
+				finalEnv[k] = vLocal
+			}
+		} else if !inLocal && inRemote {
+			if inBase && vRemote == vBase {
+				// deleted
+			} else {
+				finalEnv[k] = vRemote
+			}
+		}
+	}
+	merged.Env = finalEnv
+
+	if local.Description == base.Description && remote.Description != base.Description {
+		merged.Description = remote.Description
+	}
+
+	return merged
+}
+
+func mergeEnv(local, remote map[string]string) map[string]string {
+	result := make(map[string]string)
+	for k, v := range remote {
+		result[k] = v
+	}
+	for k, v := range local {
+		result[k] = v
+	}
+	return result
+}
+
+func areStringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isDeepEqual(a, b models.MCPServer) bool {
+	if a.ID != b.ID || a.Command != b.Command || a.Description != b.Description {
+		return false
+	}
+	if !areStringSlicesEqual(a.Args, b.Args) {
+		return false
+	}
+	if len(a.Env) != len(b.Env) {
+		return false
+	}
+	for k, v := range a.Env {
+		if b.Env[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// GetConflictDetails generates a detailed comparison report between Local and Remote configurations
+func (as *AppService) GetConflictDetails() (*models.ConflictDetails, error) {
+	// 1. Pull Remote Configs (In-memory only)
+	if as.gistSync == nil {
+		// Initialize temporarily if needed (should be initialized by DetectConflict usually)
+		config, err := as.storage.LoadSyncConfig()
+		if err != nil {
+			return nil, err
+		}
+		as.gistSync = NewGistSyncService(config.GitHubToken, config.GistID)
+		// Setup encryption if enabled
+		if config.EnableEncryption {
+			password := config.GistEncryptionPassword
+			// 如果新字段为空但旧字段有值，使用旧字段（迁移场景）
+			if password == "" && config.EncryptionPassword != "" {
+				password = config.EncryptionPassword
+			}
+			as.gistSync.SetEncryption(config.EnableEncryption, password)
+		}
+	}
+
+	remoteConfigs, err := as.gistSync.PullAgentConfigsFromGist()
+	if err != nil {
+		// If Gist is not found (404), treat as empty remote config instead of error
+		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			remoteConfigs = make(map[string]interface{})
+		} else {
+			return nil, fmt.Errorf("failed to fetch remote configs: %w", err)
+		}
+	}
+
+	// 2. Get Local Agents
+	localAgents, err := as.detector.DetectInstalledAgents()
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect local agents: %w", err)
+	}
+
+	details := &models.ConflictDetails{
+		Agents: make(map[string]models.AgentDiff),
+	}
+
+	// 3. Compare Items
+	for _, agent := range localAgents {
+		if agent.Status != "detected" {
+			continue
+		}
+
+		// Get Local Servers
+		localConfigWrap, err := as.GetAgentMCPConfig(agent.ID)
+		if err != nil {
+			continue
+		}
+		keyName := as.configLoader.GetConfigKey(agent.ID)
+		var localServers []models.MCPServer
+		if localData, ok := localConfigWrap[keyName]; ok {
+			localServers = as.convertServersDataToMCPServers(localData)
+		}
+
+		// Get Remote Servers
+		var remoteServers []models.MCPServer
+		if remoteConfig, ok := remoteConfigs[agent.ID]; ok {
+			if remoteConfigMap, ok := remoteConfig.(map[string]interface{}); ok {
+				if remoteData, ok := remoteConfigMap[keyName]; ok {
+					remoteServers = as.convertServersDataToMCPServers(remoteData)
+				}
+			}
+		}
+
+		// Compare to generate Diff
+		diff := as.generateAgentDiff(agent.ID, localServers, remoteServers)
+		details.Agents[agent.ID] = diff
+	}
+
+	return details, nil
+}
+
+func (as *AppService) generateAgentDiff(agentID string, local, remote []models.MCPServer) models.AgentDiff {
+	diff := models.AgentDiff{
+		AgentID:    agentID,
+		LocalOnly:  []models.MCPServer{},
+		RemoteOnly: []models.MCPServer{},
+		Conflicts:  []models.ServerConflict{},
+	}
+
+	localMap := toServerMap(local)
+	remoteMap := toServerMap(remote)
+
+	allIDs := make(map[string]bool)
+	for id := range localMap {
+		allIDs[id] = true
+	}
+	for id := range remoteMap {
+		allIDs[id] = true
+	}
+
+	for id := range allIDs {
+		l, hasLocal := localMap[id]
+		r, hasRemote := remoteMap[id]
+
+		if hasLocal && !hasRemote {
+			diff.LocalOnly = append(diff.LocalOnly, l)
+		} else if !hasLocal && hasRemote {
+			diff.RemoteOnly = append(diff.RemoteOnly, r)
+		} else {
+			// Both exist - Check for conflict
+			if !isDeepEqual(l, r) {
+				diff.Conflicts = append(diff.Conflicts, models.ServerConflict{
+					ServerID: id,
+					Local:    l,
+					Remote:   r,
+				})
+			}
+		}
+	}
+	return diff
+}
+
+// ResolveConflictSelective resolves conflicts by applying specific decisions for specific items
+// decisions map key format: "AgentID:ServerID" (e.g. "claude:filesystem")
+// decisions map value: "local" | "remote"
+func (as *AppService) ResolveConflictSelective(decisions map[string]string) error {
+	// 1. Pull Remote
+	remoteConfigs, err := as.gistSync.PullAgentConfigsFromGist()
+	if err != nil {
+		return fmt.Errorf("failed to pull remote for selective merge: %w", err)
+	}
+
+	// 2. Load Base (for smart merge fallbacks)
+	baseConfigs, _ := as.findBaseConfig()
+
+	// 3. Iterate and Merge
+	localAgents, _ := as.detector.DetectInstalledAgents()
+	mergedCount := 0
+
+	for _, agent := range localAgents {
+		if agent.Status != "detected" {
+			continue
+		}
+
+		keyName := as.configLoader.GetConfigKey(agent.ID)
+
+		// Local
+		localConfigWrap, _ := as.GetAgentMCPConfig(agent.ID)
+		var localServers []models.MCPServer
+		if localData, ok := localConfigWrap[keyName]; ok {
+			localServers = as.convertServersDataToMCPServers(localData)
+		}
+
+		// Remote
+		var remoteServers []models.MCPServer
+		if remoteConfig, ok := remoteConfigs[agent.ID]; ok {
+			if remoteMap, ok := remoteConfig.(map[string]interface{}); ok {
+				if remoteData, ok := remoteMap[keyName]; ok {
+					remoteServers = as.convertServersDataToMCPServers(remoteData)
+				}
+			}
+		}
+
+		// Base
+		var baseServers []models.MCPServer
+		if baseConfig, ok := baseConfigs[agent.ID]; ok {
+			if baseMap, ok := baseConfig.(map[string]interface{}); ok {
+				if baseData, ok := baseMap[keyName]; ok {
+					baseServers = as.convertServersDataToMCPServers(baseData)
+				}
+			}
+		}
+
+		// Perform Selective Merge
+		mergedServers := as.mergeSelective(agent.ID, localServers, remoteServers, baseServers, decisions)
+
+		// Save
+		mergedData := as.convertMCPServersToServersData(mergedServers)
+		newWrap := map[string]interface{}{keyName: mergedData}
+
+		if err := as.SaveAgentMCPConfig(agent.ID, newWrap); err != nil {
+			return err
+		}
+		mergedCount++
+	}
+
+	// 4. Push Result
+	return as.PushAllAgentsToGist()
+}
+
+func (as *AppService) mergeSelective(agentID string, local, remote, base []models.MCPServer, decisions map[string]string) []models.MCPServer {
+	localMap := toServerMap(local)
+	remoteMap := toServerMap(remote)
+	baseMap := toServerMap(base)
+
+	mergedMap := make(map[string]models.MCPServer)
+	allIDs := make(map[string]bool)
+	for id := range localMap {
+		allIDs[id] = true
+	}
+	for id := range remoteMap {
+		allIDs[id] = true
+	}
+	for id := range baseMap {
+		allIDs[id] = true
+	}
+
+	for id := range allIDs {
+		l, hasLocal := localMap[id]
+		r, hasRemote := remoteMap[id]
+		b, hasBase := baseMap[id]
+
+		// Check for explicit decision
+		decisionKey := fmt.Sprintf("%s:%s", agentID, id)
+		decision, hasDecision := decisions[decisionKey]
+
+		if hasDecision {
+			if decision == "local" && hasLocal {
+				mergedMap[id] = l
+				continue
+			} else if decision == "remote" && hasRemote {
+				mergedMap[id] = r
+				continue
+			} else if decision == "delete" {
+				// Explict delete instruction (if UI supports it)
+				continue
+			}
+		}
+
+		// Fallback to Smart 3-Way Merge if no explicit decision
+		if hasLocal && hasRemote {
+			if !hasBase {
+				mergedMap[id] = mergeTwoServers(l, r)
+			} else {
+				mergedMap[id] = mergeThreeWay(l, r, b)
+			}
+		} else if hasLocal && !hasRemote {
+			// Local Only
+			if hasBase && !isDeepEqual(l, b) {
+				// Local modified, Remote deleted -> Keep Local (unless logic changes)
+				mergedMap[id] = l
+			} else if !hasBase {
+				// New Local
+				mergedMap[id] = l
+			}
+		} else if !hasLocal && hasRemote {
+			// Remote Only
+			if hasBase && !isDeepEqual(r, b) {
+				// Remote modified, Local deleted -> Keep Remote
+				mergedMap[id] = r
+			} else if !hasBase {
+				// New Remote
+				mergedMap[id] = r
+			}
+		}
+	}
+
+	result := make([]models.MCPServer, 0, len(mergedMap))
+	for _, s := range mergedMap {
+		result = append(result, s)
+	}
+	return result
+}
+
+// GetConfigVersions retrieves the configuration version history
+func (as *AppService) GetConfigVersions(limit int) ([]models.ConfigVersion, error) {
+	return as.storage.ListConfigVersions(limit)
+}
+
+// updateGitignore adds .mcp-sync/ to .gitignore if not present
+func (as *AppService) updateGitignore() error {
+	homeDir := os.Getenv("USERPROFILE")
+	if homeDir == "" {
+		homeDir = os.Getenv("HOME")
+	}
+	if homeDir == "" {
+		return fmt.Errorf("could not determine user home directory")
+	}
+
+	gitignorePath := filepath.Join(homeDir, ".gitignore")
+
+	// Check if file exists
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Create new file
+			return os.WriteFile(gitignorePath, []byte(".mcp-sync/\n"), 0644)
+		}
+		return err
+	}
+
+	// Check if already ignored
+	contentStr := string(content)
+	if strings.Contains(contentStr, ".mcp-sync/") {
+		return nil
+	}
+
+	// Append to file
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if !strings.HasSuffix(contentStr, "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+
+	if _, err := f.WriteString(".mcp-sync/\n"); err != nil {
+		return err
+	}
+
+	return nil
 }

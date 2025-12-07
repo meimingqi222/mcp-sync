@@ -46,3 +46,28 @@ export interface SyncLog {
   message: string
   details?: string
 }
+
+export interface SyncConflict {
+  has_conflict: boolean
+  conflict_type: "push_conflict" | "pull_conflict"
+  local_version: ConfigVersion
+  remote_version: ConfigVersion
+  message: string
+}
+
+export interface ServerConflict {
+  server_id: string
+  local: MCPServer
+  remote: MCPServer
+}
+
+export interface AgentDiff {
+  agent_id: string
+  local_only: MCPServer[]
+  remote_only: MCPServer[]
+  conflicts: ServerConflict[]
+}
+
+export interface ConflictDetails {
+  agents: Record<string, AgentDiff>
+}

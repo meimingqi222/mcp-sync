@@ -45,9 +45,8 @@ function PasswordStrengthIndicator({
           {[...Array(5)].map((_, i) => (
             <div
               key={i}
-              className={`h-1.5 w-8 rounded ${
-                i < strength.score + 1 ? "bg-current" : "bg-gray-300"
-              }`}
+              className={`h-1.5 w-8 rounded ${i < strength.score + 1 ? "bg-current" : "bg-gray-300"
+                }`}
             />
           ))}
         </div>
@@ -82,25 +81,61 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [gistStatus, setGistStatus] = useState<string>("unknown"); // valid, invalid_token, gist_not_found, error, unknown, verifying
 
   useEffect(() => {
     loadSettings();
   }, []);
+
+  const checkGistStatus = async () => {
+    if (!settings.githubToken && !settings.gistID) return;
+
+    setGistStatus("verifying");
+    try {
+      // Use the newly added backend method if available, otherwise fallback or assume unknown
+      if ((window as any).go.main.App.GetGistStatus) {
+        const status = await (window as any).go.main.App.GetGistStatus();
+        console.log("Gist status:", status);
+        setGistStatus(status);
+      } else {
+        setGistStatus("unknown");
+      }
+    } catch (e) {
+      console.error("Check gist status error:", e);
+      setGistStatus("error");
+    }
+  };
 
   const loadSettings = async () => {
     try {
       const config = await (window as any).go.main.App.GetSyncConfig();
       if (config) {
         console.log("Loaded config:", config);
-        setSettings({
+        const newSettings = {
           githubToken: config.github_token || "",
           gistID: config.gist_id || "",
-          autoSync: config.auto_sync === true, // explicitly check for true
+          autoSync: config.auto_sync === true,
           autoSyncInterval:
             config.auto_sync_interval > 0 ? config.auto_sync_interval : 3600,
           encryptionPassword:
             config.gist_encryption_password || config.encryption_password || "",
-        });
+        };
+        setSettings(newSettings);
+
+        // Trigger status check if we have enough info
+        if (newSettings.githubToken) {
+          // We need to wait for state update or pass directly? 
+          // Better to call check separately or use helper that reads from backend (backend reads form storage)
+          // Since backend reads from storage, and we just verified what's in storage matches what we loaded...
+          // checking status immediately is fine.
+          setTimeout(() => {
+            if ((window as any).go.main.App.GetGistStatus) {
+              (window as any).go.main.App.GetGistStatus().then((status: string) => {
+                setGistStatus(status);
+              });
+            }
+          }, 100);
+        }
       }
     } catch (error) {
       console.error("Failed to load settings:", error);
@@ -186,6 +221,8 @@ export function SettingsPage() {
       // Reload settings to verify they were saved
       console.log("Reloading settings...");
       await loadSettings();
+      // Re-check status after save (since loadSettings triggers it, but explicit call here ensures it runs after save cycle)
+      checkGistStatus();
       console.log("Settings reloaded");
 
       setMessage(t("settings.settings_saved"));
@@ -274,21 +311,54 @@ export function SettingsPage() {
             </p>
           </div>
 
-          {/* Gist ID */}
-          <div>
-            <label className="block text-sm font-medium mb-2">
-              {t("settings.gist_id")}
-            </label>
-            <input
-              type="text"
-              value={settings.gistID}
-              onChange={(e) =>
-                setSettings({ ...settings, gistID: e.target.value })
-              }
-              placeholder={t("settings.gist_id_placeholder")}
-              className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
+          {/* Gist ID (Hidden/Read-only) */}
+          {/* Gist ID Status */}
+          {settings.gistID && (
+            <div className={`text-xs flex items-center gap-1.5 p-2 rounded border transition-colors duration-200
+              ${gistStatus === 'valid' ? 'bg-green-50 text-green-700 border-green-200' :
+                gistStatus === 'verifying' ? 'bg-secondary/50 text-muted-foreground border-border/50' :
+                  'bg-red-50 text-red-700 border-red-200'
+              }`}>
+
+              <span className={`w-2 h-2 rounded-full box-content shadow-[0_0_0_2px_rgba(0,0,0,0.05)]
+                ${gistStatus === 'valid' ? 'bg-green-500 shadow-[0_0_0_2px_rgba(34,197,94,0.1)]' :
+                  gistStatus === 'verifying' ? 'bg-gray-400 animate-pulse' :
+                    'bg-red-500 shadow-[0_0_0_2px_rgba(239,68,68,0.1)]'
+                }`} />
+
+              <span className="flex-1 flex justify-between items-center">
+                <span>
+                  {gistStatus === 'valid' ? (
+                    <>
+                      {t("mcp_config.sync_success")
+                        .split('(')[0]
+                        .replace('{tool}', 'GitHub Gist')
+                        .trim()}
+                      <span className="opacity-70 ml-1 font-mono">
+                        ({settings.gistID.substring(0, 8)}...)
+                      </span>
+                    </>
+                  ) : gistStatus === 'verifying' ? (
+                    <span>Verifying connection...</span>
+                  ) : gistStatus === 'gist_not_found' ? (
+                    <span>Gist Not Found (Save to repair)</span>
+                  ) : (
+                    <span>Connection Error (Check token)</span>
+                  )}
+                </span>
+
+                {/* Retry Button if error */}
+                {gistStatus !== 'valid' && gistStatus !== 'verifying' && (
+                  <button
+                    onClick={(e) => { e.preventDefault(); checkGistStatus(); }}
+                    className="ml-2 hover:underline opacity-80"
+                  >
+                    Retry
+                  </button>
+                )}
+              </span>
+            </div>
+          )}
 
           {/* Encryption Settings - REQUIRED */}
           <div className="space-y-3 border-t pt-4 bg-amber-50 p-4 rounded-lg">

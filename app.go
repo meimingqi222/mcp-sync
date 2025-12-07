@@ -22,7 +22,7 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	
+
 	// Initialize app service
 	appService, err := services.NewAppService()
 	if err != nil {
@@ -44,7 +44,7 @@ func (a *App) InitializeGistSync(token, gistID string) (string, error) {
 	if err := a.appService.ValidateGitHubToken(token); err != nil {
 		return "", err
 	}
-	
+
 	// Initialize sync and save config
 	return a.appService.InitializeGistSync(token, gistID)
 }
@@ -114,6 +114,11 @@ func (a *App) GetGistSecurityWarnings() []map[string]string {
 	return a.appService.GetGistSecurityWarnings()
 }
 
+// GetGistStatus checks the status of the Gist connection
+func (a *App) GetGistStatus() (string, error) {
+	return a.appService.GetGistStatus()
+}
+
 // SetupGistEncryption setup encryption for Gist sync
 func (a *App) SetupGistEncryption(enabled bool, password string) error {
 	return a.appService.SetupGistEncryption(enabled, password)
@@ -133,6 +138,16 @@ func (a *App) DetectPullConflict() (*models.SyncConflict, error) {
 // resolution: "keep_local", "use_remote", "merge"
 func (a *App) ResolveConflict(conflictType string, resolution string) error {
 	return a.appService.ResolveConflict(conflictType, resolution)
+}
+
+// GetConflictDetails generates a detailed comparison report between Local and Remote configurations
+func (a *App) GetConflictDetails() (*models.ConflictDetails, error) {
+	return a.appService.GetConflictDetails()
+}
+
+// ResolveConflictSelective resolves conflicts by applying specific decisions for specific items
+func (a *App) ResolveConflictSelective(decisions map[string]string) error {
+	return a.appService.ResolveConflictSelective(decisions)
 }
 
 // ConvertAgentConfig converts MCP config from one agent format to another

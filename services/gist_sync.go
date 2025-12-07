@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+const GIST_FILENAME = "mcp-config.json"
+const GIST_DESCRIPTION = "MCP Sync Configuration"
+
 type GistSyncService struct {
 	githubToken       string
 	gistID            string
@@ -30,6 +33,54 @@ func NewGistSyncService(githubToken, gistID string) *GistSyncService {
 	}
 }
 
+// FindExistingGist searches for an existing Gist with the config filename
+// Returns the Gist ID if found, empty string otherwise
+func (gs *GistSyncService) FindExistingGist() (string, error) {
+	if gs.githubToken == "" {
+		return "", fmt.Errorf("GitHub token not configured")
+	}
+
+	req, err := http.NewRequest("GET", "https://api.github.com/gists", nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", gs.githubToken))
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := gs.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to list gists: %d", resp.StatusCode)
+	}
+
+	var gists []struct {
+		ID          string                       `json:"id"`
+		Description string                       `json:"description"`
+		Files       map[string]map[string]string `json:"files"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&gists); err != nil {
+		return "", err
+	}
+
+	for _, gist := range gists {
+		// Check for specific filename
+		if _, exists := gist.Files[GIST_FILENAME]; exists {
+			// Optional: verify description to be sure
+			if gist.Description == GIST_DESCRIPTION || gist.Description == "" {
+				return gist.ID, nil
+			}
+		}
+	}
+
+	return "", nil
+}
+
 // SetEncryption 设置加密参数
 func (gs *GistSyncService) SetEncryption(enabled bool, password string) error {
 	gs.encryptionEnabled = enabled
@@ -40,13 +91,13 @@ func (gs *GistSyncService) SetEncryption(enabled bool, password string) error {
 			if err != nil {
 				return fmt.Errorf("failed to initialize secure encryption: %w", err)
 			}
-			
+
 			if !crypto.IsEnabled() {
 				if err := crypto.Enable(); err != nil {
 					return fmt.Errorf("failed to enable secure encryption: %w", err)
 				}
 			}
-			
+
 			// 创建一个包装SecurityManager的适配器
 			gs.securityMgr = &SecurityManagerAdapter{crypto: crypto}
 			gs.encryptionKey = "system-stored-key" // 标记使用系统密钥
@@ -54,7 +105,7 @@ func (gs *GistSyncService) SetEncryption(enabled bool, password string) error {
 			// 旧版本：兼容模式，使用用户提供的密码
 			gs.encryptionKey = password
 			gs.securityMgr = NewSecurityManager(password)
-			
+
 			// 尝试迁移到新系统
 			crypto, _ := NewSecureCrypto()
 			if crypto != nil {
@@ -92,9 +143,9 @@ type GistFile struct {
 }
 
 type GistResponse struct {
-	ID      string             `json:"id"`
+	ID      string              `json:"id"`
 	Files   map[string]GistFile `json:"files"`
-	Updated string             `json:"updated_at"`
+	Updated string              `json:"updated_at"`
 }
 
 type GistUpdateRequest struct {
@@ -113,7 +164,7 @@ func (gs *GistSyncService) PushToGist(servers []models.MCPServer) error {
 
 	// Prepare content
 	data := map[string]interface{}{
-		"servers": servers,
+		"servers":   servers,
 		"timestamp": time.Now().Format(time.RFC3339),
 		"encrypted": true,
 	}
@@ -239,7 +290,7 @@ func (gs *GistSyncService) CreateGist(servers []models.MCPServer, description st
 	}
 
 	content, err := json.MarshalIndent(map[string]interface{}{
-		"servers": servers,
+		"servers":   servers,
 		"timestamp": time.Now().Format(time.RFC3339),
 	}, "", "  ")
 	if err != nil {

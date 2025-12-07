@@ -68,3 +68,20 @@ type SyncConflict struct {
 	RemoteVersion *ConfigVersion `json:"remote_version"`
 	Message       string         `json:"message"`
 }
+
+type ConflictDetails struct {
+	Agents map[string]AgentDiff `json:"agents"`
+}
+
+type AgentDiff struct {
+	AgentID    string           `json:"agent_id"`
+	LocalOnly  []MCPServer      `json:"local_only"`
+	RemoteOnly []MCPServer      `json:"remote_only"`
+	Conflicts  []ServerConflict `json:"conflicts"`
+}
+
+type ServerConflict struct {
+	ServerID string    `json:"server_id"`
+	Local    MCPServer `json:"local"`
+	Remote   MCPServer `json:"remote"`
+}

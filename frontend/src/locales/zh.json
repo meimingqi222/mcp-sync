@@ -93,6 +93,7 @@
     "github_token_help": "在 GitHub 设置中创建令牌。需要 'gist' 作用域。",
     "gist_id": "Gist ID",
     "gist_id_placeholder": "输入您的 Gist ID 或留空以创建新的",
+    "gist_id_help": "留空可自动查找现有配置或创建新配置。",
     "encryption_required": "加密密码必填",
     "encryption_required_description": "所有配置在同步到 Gist 前必须加密。这是安全性要求。",
     "encryption_password": "设置加密密码",
