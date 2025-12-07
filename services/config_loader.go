@@ -378,8 +378,8 @@ func (cl *ConfigLoader) detectWSLDistros() {
 	cl.wslHomeDirs = make(map[string]string)
 
 	cmd := exec.Command("wsl", "-l", "-q")
-	// Hide window
-	// cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// Hide window on Windows to prevent console flash
+	hideWindow(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		// WSL likely not installed or fails
@@ -404,6 +404,7 @@ func (cl *ConfigLoader) detectWSLDistros() {
 
 			// Resolve Home Dir for this distro
 			homeCmd := exec.Command("wsl", "-d", distro, "sh", "-c", "echo $HOME")
+			hideWindow(homeCmd)
 			homeOut, err := homeCmd.Output()
 			if err == nil {
 				homeDir := strings.TrimSpace(string(homeOut))
